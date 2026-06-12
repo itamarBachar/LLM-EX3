@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+"""
+DoIt executable wrapper.
+"""
+
+import sys
+import os
+import importlib.util
+
+PROJECT_DIR = "/home/naamakashani/LLM/EX3"
+sys.path.insert(0, PROJECT_DIR)
+
+try:
+    # Load doit.py module directly
+    spec = importlib.util.spec_from_file_location("doit_main", os.path.join(PROJECT_DIR, "doit.py"))
+    doit_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(doit_module)
+    sys.exit(doit_module.main())
+except Exception as e:
+    print(f"Error: Failed to run doit")
+    print(f"Details: {e}")
+    print(f"\nProject directory: {PROJECT_DIR}")
+    print(f"Doit.py exists: {os.path.exists(os.path.join(PROJECT_DIR, 'doit.py'))}")
+    print("Arguments:", sys.argv)
+    sys.exit(1)
