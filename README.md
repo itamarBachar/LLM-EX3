@@ -33,7 +33,7 @@ Run the setup script to install dependencies and make the `doit` command availab
 
 ```bash
 # Navigate to the project directory
-cd /home/naamakashani/LLM/EX3
+cd /path/to/LLM-EX3
 
 # Make the setup script executable and run it
 chmod +x setup.sh
@@ -41,37 +41,41 @@ chmod +x setup.sh
 ```
 
 This script will:
-1.  ✅ Check for Python 3.
-2.  ✅ Install dependencies from `requirements.txt` (including `litellm`).
-3.  ✅ Make the `doit` script executable.
-4.  ✅ Install `doit` to `/usr/local/bin` or `~/.local/bin` for easy access.
+1.  ✅ Check for `uv` installation.
+2.  ✅ Sync dependencies from `pyproject.toml` (including `litellm` and `python-dotenv`).
+3.  ✅ Install a dynamic `doit` command wrapper to `/usr/local/bin` or `~/.local/bin` for easy global access.
 
 ### 3. Configuration
 
-The `doit` tool is configured using a file named `.doit.cfg` in your home directory.
+The `doit` tool is configured using a file named `doit.cfg` (or `.doit.cfg`) in your home directory, current directory, or project root directory.
 
 ```bash
 # Copy the example configuration file to your home directory
-cp doit.cfg ~/.doit.cfg
+cp doit.cfg ~/doit.cfg
 ```
 
-Now, you can choose which model to use by editing `~/.doit.cfg`.
+Now, you can choose which model to use by editing `~/doit.cfg`.
 
 #### Option A: Use an API Provider (Default)
 
 This is the default configuration. All you need is an API key.
 
-1.  **Set your API key** (e.g., for OpenAI):
-    ```bash
-    export OPENAI_API_KEY="sk-..."
-    ```
+1.  **Set your API key**:
+    *   **OpenAI**:
+        ```bash
+        export OPENAI_API_KEY="sk-..."
+        ```
+    *   **Gemini**:
+        ```bash
+        export GEMINI_API_KEY="your-gemini-key"
+        ```
     To make it permanent, add this line to your `~/.bashrc` or `~/.zshrc` file.
 
-2.  **Verify your configuration** in `~/.doit.cfg`:
+2.  **Verify your configuration** in `~/doit.cfg`:
     ```ini
     [model]
     provider = api
-    api_model = gpt-4o-mini
+    api_model = gpt-4o-mini  # Or gemini-1.5-flash
     ```
 
 #### Option B: Use a Local Model (Offline & Private)
@@ -83,7 +87,7 @@ This is the default configuration. All you need is an API key.
     ollama pull mistral
     ```
 
-3.  **Edit `~/.doit.cfg`** to use the local model:
+3.  **Edit `~/doit.cfg`** to use the local model:
     ```ini
     [model]
     provider = local_no_tools
@@ -120,7 +124,7 @@ doit -v "your command"   # Use verbose mode to see API responses and other detai
 
 ## 🔧 Advanced Configuration
 
-You can fine-tune the model's behavior by editing `~/.doit.cfg`.
+You can fine-tune the model's behavior by editing `~/doit.cfg`.
 
 ### Switching Models
 
@@ -133,16 +137,16 @@ You can easily switch between any provider supported by LiteLLM.
     export ANTHROPIC_API_KEY="your-api-key"
     ```
 
-2.  **Update `~/.doit.cfg`**:
+2.  **Update `~/doit.cfg`**:
     ```ini
     [model]
     provider = api
-    api_model = anthropic/claude-3-sonnet-20240229
+    api_model = anthropic/claude-3-5-sonnet-20240620
     ```
 
 ### Available Configuration Settings
 
-Here are all the settings available in `~/.doit.cfg`:
+Here are all the settings available in `~/doit.cfg`:
 
 ```ini
 [model]
@@ -177,7 +181,7 @@ debug = false
 ## Troubleshooting
 
 -   **`doit: command not found`**: Make sure `~/.local/bin` is in your `$PATH`. Add `export PATH="$HOME/.local/bin:$PATH"` to your `~/.bashrc` and restart your shell.
--   **`Configuration file not found`**: Ensure you have copied `doit.cfg` to `~/.doit.cfg`.
+-   **`Configuration file not found`**: Ensure you have copied `doit.cfg` to `~/doit.cfg` (or `.doit.cfg`).
 -   **API Authentication Errors**: Double-check that your API key is exported correctly as an environment variable (e.g., `OPENAI_API_KEY`).
 -   **Local Model Not Responding**: Make sure the Ollama server is running. You can test it with `ollama list`.
 
@@ -254,17 +258,18 @@ Task cannot be done in shell:
 ## Project Structure
 
 ```
-/home/naamakashani/LLM/EX3/
-├── doit                    # Main executable (shebang script)
-├── doit.py                 # Entry point with orchestration
-├── setup.sh                # Installation script
-├── requirements.txt        # Python dependencies
+.
+├── doit.py                 # Entry point (compatibility wrapper)
+├── pyproject.toml          # uv project configuration and dependencies
+├── setup.sh                # Installation script (sets up uv virtualenv and wrapper)
+├── test.sh                 # Test script running in uv environment
 └── doit/
     ├── __init__.py
-    ├── llm.py              # OpenAI API interaction
+    ├── main.py             # Main CLI orchestrator
+    ├── llm.py              # LLM integration (LiteLLM with OpenAI/Gemini/Claude support)
     ├── response_parser.py  # JSON parsing & validation
-    ├── safety.py           # Dangerous command detection
-    └── command_executor.py # Bash execution with timeout
+    ├── safety.py           # Dangerous command detection and confirmation
+    └── command_executor.py # Bash execution with cd command state tracking
 ```
 
 ### Module Responsibilities
@@ -374,15 +379,15 @@ export OPENAI_API_KEY="sk-..."
 ### Running Locally (Without Installation)
 
 ```bash
-cd /home/naamakashani/LLM/EX3
-export OPENAI_API_KEY="sk-..."
-python3 doit.py "list my files"
+cd /path/to/LLM-EX3
+export GEMINI_API_KEY="your-gemini-key"
+uv run doit.py "list my files"
 ```
 
 ### Verbose Output for Debugging
 
 ```bash
-python3 doit.py -v "your instruction"
+uv run doit.py -v "your instruction"
 ```
 
 Shows:

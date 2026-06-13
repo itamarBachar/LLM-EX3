@@ -26,19 +26,36 @@ class DoItConfig:
     VALID_PROVIDERS = {"api", "local_no_tools", "local_with_tools"}
     
     def __init__(self):
-        """Initialize configuration from doit.cfg in home directory."""
+        """Initialize configuration from first found doit.cfg."""
         self.config = ConfigParser()
-        self.config_path = Path.home() / "doit.cfg"
+        self.config_path = self._find_config_path()
         self._load_config()
+    
+    def _find_config_path(self) -> Path:
+        """Find configuration file using fallback search paths."""
+        project_root = Path(__file__).resolve().parent.parent
+        search_paths = [
+            Path.cwd() / "doit.cfg",
+            Path.cwd() / ".doit.cfg",
+            Path.home() / "doit.cfg",
+            Path.home() / ".doit.cfg",
+            project_root / "doit.cfg",
+            project_root / "doit" / "doit.cfg",
+        ]
+        
+        for path in search_paths:
+            if path.exists():
+                return path
+                
+        # If none exist, we raise ConfigError listing options
+        raise ConfigError(
+            f"Configuration file 'doit.cfg' or '.doit.cfg' not found in any of the search paths:\n"
+            f"  - {', '.join(str(p) for p in search_paths)}\n"
+            "Please ensure a configuration file is present."
+        )
     
     def _load_config(self) -> None:
         """Load and validate configuration file."""
-        if not self.config_path.exists():
-            raise ConfigError(
-                f"Configuration file not found at {self.config_path}\n"
-                "Please run: cp doit.cfg ~/ in the project root"
-            )
-        
         self.config.read(self.config_path)
         
         if "model" not in self.config:

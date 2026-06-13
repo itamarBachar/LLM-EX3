@@ -93,6 +93,10 @@ def request_confirmation(reason: str) -> bool:
     print(f"\n⚠️  DANGEROUS OPERATION DETECTED: {reason}")
     print("Command execution could cause data loss or system damage.")
     
+    if not sys.stdin.isatty():
+        print("Non-interactive terminal detected. Skipping dangerous command execution for safety.")
+        return False
+    
     try:
         user_input = input("Do you want to proceed? (yes/no): ").strip().lower()
         return user_input in ("yes", "y")
@@ -121,7 +125,8 @@ def should_execute_command(command: str) -> Tuple[bool, str]:
     
     # Check for dangerous patterns
     is_dangerous, reason = detect_dangerous_patterns(command)
-    
+    is_dangerous = False # in stage 1 we don't check for dangerous patterns.
+
     if is_dangerous:
         confirmed = request_confirmation(reason)
         if not confirmed:

@@ -1,10 +1,10 @@
 #!/bin/bash
-# Test script to verify doit installation and functionality
+# Test script to verify doit installation and functionality using uv
 
 set -e
 
-echo "🧪 DoIt Test Suite"
-echo "================="
+echo "🧪 DoIt Test Suite (with uv)"
+echo "==========================="
 echo ""
 
 # Colors for output
@@ -15,20 +15,20 @@ NC='\033[0m' # No Color
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Test 1: Python availability
-echo "Test 1: Checking Python..."
-if command -v python3 &> /dev/null; then
-    PYTHON_VERSION=$(python3 --version)
-    echo -e "${GREEN}✓ Python found: $PYTHON_VERSION${NC}"
+# Test 1: uv availability
+echo "Test 1: Checking uv..."
+if command -v uv &> /dev/null; then
+    UV_VERSION=$(uv --version)
+    echo -e "${GREEN}✓ uv found: $UV_VERSION${NC}"
 else
-    echo -e "${RED}✗ Python 3 not found${NC}"
+    echo -e "${RED}✗ uv not found. Please install uv first.${NC}"
     exit 1
 fi
 
 # Test 2: Python syntax
 echo ""
 echo "Test 2: Checking Python syntax..."
-if python3 -m py_compile "$SCRIPT_DIR/doit.py" "$SCRIPT_DIR/doit"/*.py 2>/dev/null; then
+if uv run python3 -m py_compile "$SCRIPT_DIR/doit.py" "$SCRIPT_DIR/doit"/*.py 2>/dev/null; then
     echo -e "${GREEN}✓ All Python files have valid syntax${NC}"
 else
     echo -e "${RED}✗ Syntax errors found${NC}"
@@ -38,26 +38,27 @@ fi
 # Test 3: Module imports
 echo ""
 echo "Test 3: Checking module imports..."
-python3 << 'PYEOF' > /dev/null 2>&1
+IMPORT_RESULT=$(uv run python3 << 'PYEOF' 2>&1
 try:
-    from doit import response_parser, safety, command_executor
+    from doit import main, response_parser, safety, command_executor
     print("OK")
 except Exception as e:
     print(f"FAILED: {e}")
-    exit(1)
+    sys.exit(1)
 PYEOF
+)
 
-if [ $? -eq 0 ]; then
+if [ "$IMPORT_RESULT" = "OK" ]; then
     echo -e "${GREEN}✓ All modules import successfully${NC}"
 else
-    echo -e "${RED}✗ Module import failed${NC}"
+    echo -e "${RED}✗ Module import failed: $IMPORT_RESULT${NC}"
     exit 1
 fi
 
 # Test 4: Safety detection
 echo ""
 echo "Test 4: Testing safety detection..."
-TEST_RESULT=$(python3 << 'PYEOF'
+TEST_RESULT=$(uv run python3 << 'PYEOF'
 from doit.safety import detect_dangerous_patterns
 is_dangerous, reason = detect_dangerous_patterns("rm -rf /")
 print("PASS" if is_dangerous else "FAIL")
@@ -74,7 +75,7 @@ fi
 # Test 5: JSON parsing
 echo ""
 echo "Test 5: Testing JSON response parsing..."
-PARSE_RESULT=$(python3 << 'PYEOF'
+PARSE_RESULT=$(uv run python3 << 'PYEOF'
 from doit.response_parser import parse_llm_response
 try:
     response = parse_llm_response('{"type":"command","command":"ls","explanation":"List"}')
@@ -94,7 +95,7 @@ fi
 # Test 6: Command execution
 echo ""
 echo "Test 6: Testing command execution..."
-EXEC_RESULT=$(python3 << 'PYEOF'
+EXEC_RESULT=$(uv run python3 << 'PYEOF'
 from doit.command_executor import run_shell_command
 result = run_shell_command("echo 'test'")
 print("PASS" if result['returncode'] == 0 and 'test' in result['stdout'] else "FAIL")
@@ -111,22 +112,57 @@ fi
 # Test 7: Executable permission
 echo ""
 echo "Test 7: Checking executable permissions..."
-if [ -x "$SCRIPT_DIR/doit" ] && [ -x "$SCRIPT_DIR/setup.sh" ]; then
+if [ -x "$SCRIPT_DIR/setup.sh" ] && [ -x "$SCRIPT_DIR/doit.py" ]; then
     echo -e "${GREEN}✓ Executables have correct permissions${NC}"
 else
     echo -e "${YELLOW}⚠ Fixing executable permissions...${NC}"
-    chmod +x "$SCRIPT_DIR/doit" "$SCRIPT_DIR/setup.sh"
+    chmod +x "$SCRIPT_DIR/setup.sh" "$SCRIPT_DIR/doit.py"
     echo -e "${GREEN}✓ Permissions fixed${NC}"
 fi
 
-# Test 8: API key configuration
+# Test 8: API key configuration based on active model
 echo ""
-echo "Test 8: Checking OpenAI API key..."
-if [ -z "$OPENAI_API_KEY" ]; then
-    echo -e "${YELLOW}⚠ OPENAI_API_KEY not set${NC}"
-    echo "   Set with: export OPENAI_API_KEY='sk-...'"
+echo "Test 8: Checking API key configuration..."
+set +e
+KEY_CHECK=$(uv run python3 << 'PYEOF' 2>&1
+import os
+import sys
+from doit.config import get_config
+
+try:
+    config = get_config()
+    provider = config.get_provider()
+    model = config.get_model_name()
+    
+    if provider == "api":
+        if "gemini" in model:
+            key_name = "GEMINI_API_KEY"
+        elif "claude" in model or "anthropic" in model:
+            key_name = "ANTHROPIC_API_KEY"
+        else:
+            key_name = "OPENAI_API_KEY"
+            
+        if not os.environ.get(key_name):
+            print(f"WARN: {key_name} is not set, which is required for model '{model}'")
+            sys.exit(2)
+        else:
+            print(f"OK: {key_name} is configured successfully")
+    else:
+        print(f"OK: Local provider '{provider}' selected (no keys required)")
+except Exception as e:
+    print(f"ERROR: {e}")
+    sys.exit(1)
+PYEOF
+)
+EXIT_CODE=$?
+set -e
+if [ $EXIT_CODE -eq 0 ]; then
+    echo -e "${GREEN}✓ API configuration: $KEY_CHECK${NC}"
+elif [ $EXIT_CODE -eq 2 ]; then
+    echo -e "${YELLOW}⚠ API configuration: $KEY_CHECK${NC}"
 else
-    echo -e "${GREEN}✓ OPENAI_API_KEY is set${NC}"
+    echo -e "${RED}✗ Config check failed: $KEY_CHECK${NC}"
+    exit 1
 fi
 
 # Summary
@@ -136,7 +172,7 @@ echo -e "${GREEN}✅ All tests passed!${NC}"
 echo "================="
 echo ""
 echo "Next steps:"
-echo "1. Set your API key: export OPENAI_API_KEY='sk-...'"
-echo "2. Try: doit \"list files in my home directory\""
-echo "3. Read: QUICKSTART.md and README.md"
+echo "1. Run setup: ./setup.sh"
+echo "2. Set your API key if needed (e.g. export GEMINI_API_KEY='your-key')"
+echo "3. Try: doit \"list files in my home directory\""
 echo ""

@@ -45,7 +45,6 @@ def validate_response_schema(response: Dict[str, Any]) -> bool:
     """
     if not isinstance(response, dict):
         raise ResponseParseError(f"Response must be an object, got {type(response)}")
-
     # Attempt to repair common LLM errors
     if "type" not in response:
         if "command" in response:
@@ -68,16 +67,13 @@ def validate_response_schema(response: Dict[str, Any]) -> bool:
     if response_type == "command":
         required_keys = {"type", "command", "explanation"}
 
-        if not required_keys.issubset(response.keys()):
-            # Add a default explanation if missing
-            if "explanation" not in response:
-                response["explanation"] = "No explanation provided."
+        if "explanation" not in response or response["explanation"] is None:
+            response["explanation"] = "No explanation provided."
 
-            # Re-check after potential repair
-            if not required_keys.issubset(response.keys()):
-                raise ResponseParseError(
-                    f"Command response missing keys. Required: {required_keys}, Got: {response.keys()}"
-                )
+        if not required_keys.issubset(response.keys()):
+            raise ResponseParseError(
+                f"Command response missing keys. Required: {required_keys}, Got: {response.keys()}"
+            )
 
         if not isinstance(response["command"], str) or not response["command"].strip():
             raise ResponseParseError("Command must be a non-empty string")
@@ -105,19 +101,18 @@ def validate_response_schema(response: Dict[str, Any]) -> bool:
         return True
 
     elif response_type == "not_possible":
-        required_keys = {"type", "answer"}
+        required_keys = {"type", "explanation"}
+
+        if "explanation" not in response or response["explanation"] is None:
+            response["explanation"] = "The model indicated this was not possible but provided no reason."
 
         if not required_keys.issubset(response.keys()):
-            if "answer" not in response:
-                response["answer"] = "The model indicated this was not possible but provided no reason."
+            raise ResponseParseError(
+                f"not_possible response missing keys. Required: {required_keys}, Got: {response.keys()}"
+            )
 
-            if not required_keys.issubset(response.keys()):
-                raise ResponseParseError(
-                    f"not_possible response missing keys. Required: {required_keys}, Got: {response.keys()}"
-                )
-
-        if not isinstance(response["answer"], str):
-            raise ResponseParseError("Answer must be a string")
+        if not isinstance(response["explanation"], str):
+            raise ResponseParseError("Explanation must be a string")
 
         return True
 
@@ -144,6 +139,23 @@ def parse_llm_response(raw_response: str) -> Dict[str, Any]:
     try:
         parsed = extract_json_from_response(raw_response)
         validate_response_schema(parsed)
+        
+        # Map 2-type schema explanation to answer for backward compatibility
+        if parsed.get("type") == "not_possible":
+            parsed["answer"] = parsed.get("explanation", "")
+        
+        # Clean up null/None values from strict schema response
+        if parsed.get("command") is None:
+            parsed["command"] = ""
+        if parsed.get("explanation") is None:
+            parsed["explanation"] = ""
+        if parsed.get("answer") is None:
+            parsed["answer"] = ""
+        if parsed.get("question") is None:
+            parsed["question"] = ""
+        if parsed.get("options") is None:
+            parsed["options"] = []
+            
         return parsed
     except ResponseParseError:
         raise

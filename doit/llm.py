@@ -20,18 +20,14 @@ You are a bash command expert that converts natural language instructions into b
 You must choose exactly one response type:
 
 1. command:
-Use this when the user asks for something that should be executed in bash.
+Use this when the user asks for something that can be executed in bash.
 
-2. answer:
-Use this for conversational requests, greetings, jokes, help questions, or general explanations.
-
-3. not_possible:
-Use this when the request cannot reasonably be done with a standard bash command.
-
-4. clarification:
-Use this when the request is ambiguous and you need the user to choose before creating a command.
+2. not_possible:
+Use this when the user request is not a bash command (e.g. conversational requests, greetings, jokes, help questions, or things that cannot reasonably be done with a standard bash command).
 
 Rules:
+- For 'command', return the command in the 'command' field and explain it in the 'explanation' field.
+- For 'not_possible', return null in the 'command' field and write a polite, helpful response in the 'explanation' field (e.g., explain that you are a bash command expert and cannot fulfill that request).
 - Use bash syntax.
 - Return only one command.
 - Avoid sudo unless absolutely necessary.
@@ -47,28 +43,16 @@ RESPONSE_SCHEMA = {
     "properties": {
         "type": {
             "type": "string",
-            "enum": ["command", "answer", "not_possible", "clarification"],
+            "enum": ["command", "not_possible"],
         },
         "command": {
-            "type": "string",
+            "type": ["string", "null"],
         },
         "explanation": {
-            "type": "string",
-        },
-        "answer": {
-            "type": "string",
-        },
-        "question": {
-            "type": "string",
-        },
-        "options": {
-            "type": "array",
-            "items": {
-                "type": "string",
-            },
+            "type": ["string", "null"],
         },
     },
-    "required": ["type"],
+    "required": ["type", "command", "explanation"],
     "additionalProperties": False,
 }
 
@@ -87,6 +71,10 @@ def _get_litellm_model_id(config: DoItConfig) -> str:
     if provider == "api":
         # For API models, prepend provider if not already included
         if "/" not in model_name:
+            if model_name.startswith("gemini"):
+                return f"gemini/{model_name}"
+            elif model_name.startswith("claude"):
+                return f"anthropic/{model_name}"
             # Assume OpenAI if no provider specified
             return f"openai/{model_name}"
         return model_name
@@ -96,6 +84,17 @@ def _get_litellm_model_id(config: DoItConfig) -> str:
             return model_name
         # Default to ollama for local models
         return f"ollama/{model_name}"
+
+
+def _validate_api_keys(config: DoItConfig, model_id: str) -> None:
+    """Validate that required API keys are present in environment variables."""
+    if config.get_provider() == "api":
+        if model_id.startswith("gemini/") and not os.environ.get("GEMINI_API_KEY"):
+            raise Exception("GEMINI_API_KEY environment variable is not set. Please set it before using Gemini models.")
+        elif model_id.startswith("openai/") and not os.environ.get("OPENAI_API_KEY"):
+            raise Exception("OPENAI_API_KEY environment variable is not set. Please set it before using OpenAI models.")
+        elif (model_id.startswith("anthropic/") or model_id.startswith("claude")) and not os.environ.get("ANTHROPIC_API_KEY"):
+            raise Exception("ANTHROPIC_API_KEY environment variable is not set. Please set it before using Claude models.")
 
 
 def call_llm_for_bash(instruction: str) -> str:
@@ -115,6 +114,7 @@ def call_llm_for_bash(instruction: str) -> str:
         litellm.set_verbose(True)
     
     model_id = _get_litellm_model_id(config)
+    _validate_api_keys(config, model_id)
     temperature = config.get_temperature()
     max_tokens = config.get_max_tokens()
     
@@ -129,7 +129,14 @@ def call_llm_for_bash(instruction: str) -> str:
             ],
             temperature=temperature,
             max_tokens=max_tokens,
-            response_format={"type": "json_object"},  # LiteLLM supports json_object
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "bash_response",
+                    "strict": True,
+                    "schema": RESPONSE_SCHEMA
+                }
+            },
         )
         
         return response.choices[0].message.content.strip()
@@ -149,6 +156,7 @@ def call_llm_for_bash_prompt_fallback(instruction: str) -> str:
     """
     config = get_config()
     model_id = _get_litellm_model_id(config)
+    _validate_api_keys(config, model_id)
     temperature = config.get_temperature()
     max_tokens = config.get_max_tokens()
 

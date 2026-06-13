@@ -7,7 +7,7 @@ import sys
 import os
 import importlib.util
 
-PROJECT_DIR = "/home/naamakashani/LLM/EX3"
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_DIR)
 
 try:

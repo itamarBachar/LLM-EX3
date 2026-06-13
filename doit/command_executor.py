@@ -8,9 +8,70 @@ Responsibilities:
 - Handle execution errors gracefully
 """
 
+import os
 import subprocess
 import sys
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+
+
+def handle_cd_command(command: str) -> Optional[Dict[str, Any]]:
+    """
+    Handle cd commands natively in Python.
+    Changes the directory of the current process and writes to DOIT_CD_FILE
+    if it is configured in the environment, so the parent shell can navigate.
+    """
+    cleaned = command.strip()
+    
+    # Check if it's a simple cd command (no metacharacters)
+    if not ((cleaned.startswith("cd ") or cleaned == "cd") and not any(char in cleaned for char in ["&&", ";", "|", ">", "<"])):
+        return None
+        
+    parts = cleaned.split(None, 1)
+    if len(parts) == 1:
+        target_dir = os.path.expanduser("~")
+        path_str = "~"
+    else:
+        path_str = parts[1].strip()
+        # Strip matching quotes if present
+        if (path_str.startswith('"') and path_str.endswith('"')) or (path_str.startswith("'") and path_str.endswith("'")):
+            path_str = path_str[1:-1]
+        target_dir = os.path.expanduser(path_str)
+        
+    try:
+        target_dir = os.path.abspath(target_dir)
+        if not os.path.exists(target_dir):
+            return {
+                "stdout": "",
+                "stderr": f"cd: no such file or directory: {path_str}",
+                "returncode": 1,
+                "timeout": False,
+            }
+            
+        # Change current directory of the Python process itself
+        os.chdir(target_dir)
+        
+        # If running in a shell wrapper that set DOIT_CD_FILE, write to it
+        cd_file = os.environ.get("DOIT_CD_FILE")
+        if cd_file:
+            try:
+                with open(cd_file, "w") as f:
+                    f.write(target_dir)
+            except Exception:
+                pass
+                
+        return {
+            "stdout": "",
+            "stderr": "",
+            "returncode": 0,
+            "timeout": False,
+        }
+    except Exception as e:
+        return {
+            "stdout": "",
+            "stderr": f"cd: {str(e)}",
+            "returncode": 1,
+            "timeout": False,
+        }
 
 
 def run_shell_command(command: str, shell: str = "/bin/bash", timeout: int = 20) -> Dict[str, Any]:
@@ -29,6 +90,11 @@ def run_shell_command(command: str, shell: str = "/bin/bash", timeout: int = 20)
         - returncode: Exit code
         - timeout: Whether command timed out
     """
+    # Try handling cd natively
+    cd_result = handle_cd_command(command)
+    if cd_result is not None:
+        return cd_result
+
     result = {
         "stdout": "",
         "stderr": "",
