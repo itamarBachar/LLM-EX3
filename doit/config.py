@@ -82,9 +82,9 @@ class DoItConfig:
         if provider == "api":
             model = self.config.get("model", "api_model", fallback="gpt-4o-mini").strip()
         elif provider == "local_no_tools":
-            model = self.config.get("model", "local_model_no_tools", fallback="mistral").strip()
+            model = self.config.get("model", "local_model_no_tools", fallback="ollama/gemma3:4b").strip()
         else:  # local_with_tools
-            model = self.config.get("model", "local_model_with_tools", fallback="neural-chat").strip()
+            model = self.config.get("model", "local_model_with_tools", fallback="ollama/qwen3:4b-instruct").strip()
         
         if not model:
             raise ConfigError(f"No model specified for provider '{provider}'")

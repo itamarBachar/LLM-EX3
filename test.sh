@@ -59,9 +59,23 @@ fi
 echo ""
 echo "Test 4: Testing safety detection..."
 TEST_RESULT=$(uv run python3 << 'PYEOF'
-from doit.safety import detect_dangerous_patterns
-is_dangerous, reason = detect_dangerous_patterns("rm -rf /")
-print("PASS" if is_dangerous else "FAIL")
+import doit.safety as safety
+
+safety.assess_command_risk_with_llm = lambda command: (
+    True,
+    "runs with elevated privileges",
+) if command == "sudo reboot" else (False, "read-only")
+
+checks = [
+    safety.detect_filesystem_modification("rm -rf /")[0],
+    safety.detect_filesystem_modification("mkdir demo")[0],
+    safety.detect_filesystem_modification("mv old.txt new.txt")[0],
+    safety.detect_dangerous_patterns("sudo reboot")[0],
+    safety.detect_filesystem_modification('echo "a > b"')[0] is False,
+    safety.should_execute_command("ls -la")[0],
+]
+
+print("PASS" if all(checks) else "FAIL")
 PYEOF
 )
 

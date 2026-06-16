@@ -2,7 +2,7 @@
 
 DoIt is a powerful command-line tool that converts your natural language instructions into executable shell commands. Describe what you want in plain English, and let DoIt handle the rest.
 
-The tool now supports multiple LLM providers, including API-based services (like OpenAI, Anthropic, and Groq) and local, offline models (like Llama or Mistral via Ollama).
+The tool now supports multiple LLM providers, including API-based services (like OpenAI, Anthropic, and Groq) and local, offline models (like Gemma, Qwen, Llama, or Mistral via Ollama).
 
 ```bash
 doit "list all files in my Documents folder larger than 10MB"
@@ -82,17 +82,37 @@ This is the default configuration. All you need is an API key.
 
 1.  **Install Ollama** by following the instructions at [ollama.ai](https://ollama.ai).
 
-2.  **Download a model**:
+2.  **Download a local instruction model**:
     ```bash
-    ollama pull mistral
+    ollama pull gemma3:4b
     ```
 
 3.  **Edit `~/doit.cfg`** to use the local model:
     ```ini
     [model]
     provider = local_no_tools
-    local_model_no_tools = mistral
+    local_model_no_tools = ollama/gemma3:4b
     ```
+
+4.  **Or use a local model with tool-calling support**:
+    ```ini
+    [model]
+    provider = local_with_tools
+    local_model_with_tools = ollama/qwen3:4b-instruct
+    ```
+
+5.  **Download the configured Ollama model automatically**:
+    ```bash
+    ./SETUP_MODELS.sh --download
+    ```
+    This reads your current `~/doit.cfg` and runs `ollama pull` for the selected local model.
+
+6.  **Install and start Ollama from the repo helpers**:
+    ```bash
+    ./SETUP_MODELS.sh --install-ollama
+    ./START_OLLAMA.sh
+    ```
+    Use the first command if `ollama` is not installed yet. Use the second command to start the local server before running `doit` with local models.
 
 ## 💡 Usage
 
@@ -158,10 +178,10 @@ provider = api
 api_model = gpt-4o-mini
 
 # For local models without tool-calling support
-local_model_no_tools = mistral
+local_model_no_tools = ollama/gemma3:4b
 
 # For local models with tool-calling support
-local_model_with_tools = neural-chat
+local_model_with_tools = ollama/qwen3:4b-instruct
 
 # --- Behavior ---
 # Model temperature (0=deterministic, 1=creative)
@@ -204,9 +224,9 @@ doit -v "list the files"
 ```
 1. CLI Input
    ↓
-2. LLM Call (OpenAI API)
-   - Sends instruction with system prompt
-   - Gets structured JSON response
+2. LLM Call (provider-aware)
+    - API or tool-capable local models try tool/structured output first
+    - General local instruction models fall back to prompt-only JSON
    ↓
 3. Response Parsing
    - Extracts JSON from LLM output
