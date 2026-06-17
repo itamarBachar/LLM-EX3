@@ -5,6 +5,8 @@ DoIt: Natural language CLI command executor.
 import sys
 import os
 import argparse
+from typing import Optional
+
 import dotenv
 
 
@@ -19,6 +21,8 @@ from doit.response_parser import (
 )
 from doit.safety import should_execute_command
 from doit.command_executor import execute_and_display
+from doit import history
+from doit.config import get_config, ConfigError
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -52,11 +56,103 @@ Examples:
         help="Show version information",
     )
 
+    parser.add_argument(
+        "--no-history",
+        action="store_true",
+        help="Ignore and do not record multi-turn history for this invocation",
+    )
+
+    parser.add_argument(
+        "--clear-history",
+        action="store_true",
+        help="Clear the conversation history for the current session and exit",
+    )
+
     return parser.parse_args()
 
 
 def print_version() -> None:
     print("DoIt v0.1.0 - Natural language CLI command executor")
+
+
+def _history_enabled(args: argparse.Namespace) -> bool:
+    """Decide whether to use/record history for this invocation."""
+    if args.no_history:
+        return False
+    try:
+        return get_config().is_history_enabled()
+    except ConfigError:
+        # If config can't be read, fall back to enabling history by default.
+        return True
+
+
+def _history_limit() -> int:
+    """Resolve how many recent turns to include as context."""
+    try:
+        return get_config().get_history_limit()
+    except ConfigError:
+        return 10
+
+
+# Cap on how many times we will re-ask the user before giving up, to avoid the
+# model getting stuck in a clarification loop.
+MAX_CLARIFICATION_ROUNDS = 3
+
+
+def prompt_for_clarification(question: str, options: list) -> Optional[str]:
+    """
+    Show a clarification question (and any options) and wait for the user.
+
+    Returns the user's answer as a string. If options are shown and the user
+    types a valid option number, the corresponding option text is returned;
+    otherwise the raw typed text is used. Returns None when there is no
+    interactive terminal or the user aborts, so the caller can stop cleanly.
+    """
+    print(f"❓ {question}")
+    for i, option in enumerate(options, start=1):
+        print(f"  {i}. {option}")
+    print()
+
+    if not sys.stdin.isatty():
+        print("Non-interactive terminal detected; cannot ask for clarification.")
+        return None
+
+    prompt = "Your answer (type a number or describe): " if options else "Your answer: "
+
+    try:
+        raw = input(prompt).strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\nClarification cancelled.")
+        return None
+
+    if not raw:
+        return None
+
+    # If the user picked a valid option number, map it to the option text.
+    if options and raw.isdigit():
+        index = int(raw) - 1
+        if 0 <= index < len(options):
+            return options[index]
+
+    return raw
+
+
+def build_clarified_instruction(original: str, exchanges: list) -> str:
+    """
+    Combine the original request with the clarification Q&A into a single
+    instruction for the next model call, so every backend receives the same
+    disambiguated context.
+    """
+    lines = [f"Original request: {original}", ""]
+    for question, answer in exchanges:
+        lines.append(f"You asked the user: {question}")
+        lines.append(f"The user answered: {answer}")
+    lines.append("")
+    lines.append(
+        "Using the clarification(s) above, fulfill the original request now. "
+        "Do not ask again unless it is still genuinely impossible to proceed."
+    )
+    return "\n".join(lines)
 
 
 def main() -> int:
@@ -70,6 +166,14 @@ def main() -> int:
         print_version()
         return 0
 
+    if args.clear_history:
+        cleared = history.clear_history()
+        if cleared:
+            print("🧹 Cleared conversation history.")
+        else:
+            print("No conversation history to clear.")
+        return 0
+
     if not args.instruction:
         print("Error: No instruction provided.")
         print("Usage: doit \"your instruction here\"")
@@ -80,45 +184,83 @@ def main() -> int:
     if args.verbose:
         print(f"[DEBUG] Instruction: {instruction}\n")
 
-    # print("🤔 Thinking...\n")
-    llm_response = call_llm_with_fallback(instruction)
+    # Determine whether multi-turn history should be used this invocation.
+    history_enabled = _history_enabled(args)
 
-    if llm_response is None:
-        print("Error: Could not get response from LLM.")
-        return 1
+    history_context = None
+    if history_enabled:
+        recent_turns = history.load_recent_turns(_history_limit())
+        history_context = history.format_history_for_prompt(recent_turns) or None
+        if args.verbose and history_context:
+            print(f"[DEBUG] Loaded {len(recent_turns)} prior turn(s) as context.\n")
 
-    if args.verbose:
-        print(f"[DEBUG] LLM Response:\n{llm_response}\n")
+    def record(response_type: str, **kwargs) -> None:
+        """Record this turn to history when history is enabled."""
+        if history_enabled:
+            history.append_turn(instruction, response_type, **kwargs)
 
-    try:
-        parsed_response = parse_llm_response(llm_response)
-    except ResponseParseError as e:
-        print(f"Error: Could not parse LLM response: {str(e)}")
+    # The model may respond with a clarification question instead of a final
+    # answer. When it does, we ask the user, then re-query with the original
+    # request plus the clarification exchange, looping up to a small cap.
+    model_input = instruction
+    clarification_exchanges = []
+
+    for clarification_round in range(MAX_CLARIFICATION_ROUNDS + 1):
+        # print("🤔 Thinking...\n")
+        llm_response = call_llm_with_fallback(model_input, history_context=history_context)
+
+        if llm_response is None:
+            print("Error: Could not get response from LLM.")
+            return 1
+
         if args.verbose:
-            print(f"Raw response: {llm_response}")
-        return 1
+            print(f"[DEBUG] LLM Response:\n{llm_response}\n")
 
-    if args.verbose:
-        print(f"[DEBUG] Parsed Response Type: {parsed_response.get('type')}\n")
+        try:
+            parsed_response = parse_llm_response(llm_response)
+        except ResponseParseError as e:
+            print(f"Error: Could not parse LLM response: {str(e)}")
+            if args.verbose:
+                print(f"Raw response: {llm_response}")
+            return 1
 
-    if is_answer_response(parsed_response):
-        print(f"💬 {parsed_response.get('answer', '')}\n")
-        return 0
+        if args.verbose:
+            print(f"[DEBUG] Parsed Response Type: {parsed_response.get('type')}\n")
 
-    if is_not_possible_response(parsed_response):
-        print(f"❌ {parsed_response.get('answer', '')}\n")
-        return 0
+        if not is_clarification_response(parsed_response):
+            break
 
-    if is_clarification_response(parsed_response):
+        # Clarification requested.
         question = parsed_response.get("question", "")
         options = parsed_response.get("options", [])
 
-        print(f"❓ {question}")
+        if clarification_round >= MAX_CLARIFICATION_ROUNDS:
+            print(f"❓ {question}")
+            print("\nToo many clarification rounds; stopping. Please rephrase "
+                  "your request with more detail.\n")
+            record("clarification", answer=question)
+            return 1
 
-        for i, option in enumerate(options, start=1):
-            print(f"{i}. {option}")
+        answer = prompt_for_clarification(question, options)
 
-        print()
+        if answer is None:
+            # No interactive terminal, or the user aborted.
+            record("clarification", answer=question)
+            return 1
+
+        clarification_exchanges.append((question, answer))
+        model_input = build_clarified_instruction(instruction, clarification_exchanges)
+
+    if is_answer_response(parsed_response):
+        answer = parsed_response.get("answer", "")
+        print(f"💬 {answer}\n")
+        record("answer", answer=answer)
+        return 0
+
+    if is_not_possible_response(parsed_response):
+        answer = parsed_response.get("answer", "")
+        print(f"❌ {answer}\n")
+        record("not_possible", answer=answer)
         return 0
 
     if is_command_response(parsed_response):
@@ -140,9 +282,13 @@ def main() -> int:
 
         if not can_execute:
             print(f"⛔ {safety_message}\n")
+            # Still record the proposed command so a follow-up can reference it.
+            record("command", command=command, explanation=explanation)
             return 1
 
-        return execute_and_display(command)
+        returncode = execute_and_display(command)
+        record("command", command=command, explanation=explanation)
+        return returncode
 
     print(f"Error: Unexpected response type: {parsed_response.get('type')}\n")
     return 1

@@ -109,6 +109,14 @@ class DoItConfig:
     def is_debug(self) -> bool:
         """Check if debug logging is enabled."""
         return self.config.getboolean("model", "debug", fallback=False)
+
+    def is_history_enabled(self) -> bool:
+        """Whether multi-turn history is recorded and fed back to the model."""
+        return self.config.getboolean("history", "enabled", fallback=True)
+
+    def get_history_limit(self) -> int:
+        """How many recent turns to include as context on each invocation."""
+        return self.config.getint("history", "max_turns", fallback=10)
     
     def has_tool_calling_support(self) -> bool:
         """Check if the current model supports tool calling."""

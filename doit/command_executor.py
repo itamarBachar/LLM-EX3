@@ -169,19 +169,19 @@ def format_command_output(result: Dict[str, Any]) -> str:
 def execute_and_display(command: str) -> int:
     """
     Execute a command and display formatted output.
-    
+
     Args:
         command: Shell command to execute.
-        
+
     Returns:
         Exit code of the command.
     """
     print(f"\n📍 Executing: {command}\n")
-    
+
     result = run_shell_command(command)
     output = format_command_output(result)
-    
+
     print(output)
     print()
-    
+
     return result["returncode"]

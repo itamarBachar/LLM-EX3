@@ -18,11 +18,51 @@ class ResponseParseError(Exception):
     pass
 
 
+def _extract_first_json_object(text: str) -> str:
+    """
+    Return the first balanced ``{...}`` block in ``text``, or ``text`` unchanged
+    when no opening brace is found. This rescues responses where the model wraps
+    the JSON in prose (e.g. "Here is the JSON: { ... }").
+    """
+    start = text.find("{")
+    if start == -1:
+        return text
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for i in range(start, len(text)):
+        char = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+
+    return text[start:]
+
+
 def extract_json_from_response(raw_response: str) -> Dict[str, Any]:
     """
     Extract valid JSON from LLM response.
+
+    Handles three shapes seen from local models:
+    - A fenced block with any language tag (```json, ```bash, or none).
+    - Raw JSON with no fence.
+    - JSON embedded in surrounding prose.
     """
-    markdown_pattern = r"```(?:json)?\s*\n?([\s\S]*?)\n?```"
+    # Strip a fenced code block regardless of its language tag (json, bash, ...).
+    markdown_pattern = r"```[a-zA-Z0-9]*\s*\n?([\s\S]*?)\n?```"
     markdown_match = re.search(markdown_pattern, raw_response)
 
     if markdown_match:
@@ -31,8 +71,14 @@ def extract_json_from_response(raw_response: str) -> Dict[str, Any]:
         json_text = raw_response.strip()
 
     try:
-        parsed = json.loads(json_text)
-        return parsed
+        return json.loads(json_text)
+    except json.JSONDecodeError:
+        pass
+
+    # Last resort: pull the first balanced {...} object out of the text.
+    candidate = _extract_first_json_object(json_text).strip()
+    try:
+        return json.loads(candidate)
     except json.JSONDecodeError as e:
         raise ResponseParseError(
             f"Invalid JSON in response: {str(e)}\nRaw: {json_text[:200]}"

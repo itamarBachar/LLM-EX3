@@ -11,25 +11,53 @@ Responsibilities:
 from typing import Any, Dict, List, Optional, Tuple
 import json
 import os
+import re
 import litellm
 from doit.config import get_config, ConfigError, DoItConfig
-from doit.response_parser import extract_json_from_response
+from doit.response_parser import (
+    extract_json_from_response,
+    parse_llm_response,
+    ResponseParseError,
+)
 
 
 SYSTEM_PROMPT = """
-You are a bash command expert that converts natural language instructions into bash commands.
+You are a helpful shell assistant. You can either run bash commands for the
+user or answer their questions in plain language.
 
 You must choose exactly one response type:
 
 1. command:
-Use this when the user asks for something that can be executed in bash.
+Use this when the user wants an action performed now in the shell (e.g. "list
+the files", "delete the logs", "show disk usage"). Return the command to run.
 
-2. not_possible:
-Use this when the user request is not a bash command (e.g. conversational requests, greetings, jokes, help questions, or things that cannot reasonably be done with a standard bash command).
+2. answer:
+Use this when the user is asking a QUESTION or wants information, an
+explanation, or conversation rather than an action — for example "how do I
+find large files?", "what does chmod 755 mean?", "what can you do?", or "tell
+me a joke". Write a helpful, direct answer in the 'answer' field. You may
+include example commands inside the answer text, but they are NOT executed —
+this response only informs the user. Be genuinely useful and friendly.
+
+3. clarification:
+Use this ONLY when the request is genuinely ambiguous and you cannot produce a
+correct command without more information from the user (for example "sort by
+date" could mean creation date vs. access date vs. modification date). Ask a
+single, concrete question and, when the choices are known, offer a short list
+of options. Do NOT use this for requests you can reasonably fulfill with a
+sensible default — prefer producing a command in that case.
+
+4. not_possible:
+Use this only when the request genuinely cannot be helped with — it is neither
+a shell action nor a question you can answer (e.g. it is harmful or completely
+out of scope). Put a polite explanation in the 'explanation' field. Prefer
+'answer' over 'not_possible' whenever you can say something useful.
 
 Rules:
 - For 'command', return the command in the 'command' field and explain it in the 'explanation' field.
-- For 'not_possible', return null in the 'command' field and write a polite, helpful response in the 'explanation' field (e.g., explain that you are a bash command expert and cannot fulfill that request).
+- For 'answer', put your reply in the 'answer' field. Leave 'command' null.
+- For 'clarification', put your question in the 'question' field and, when applicable, a list of choices in the 'options' field (otherwise an empty list). Leave 'command' null.
+- For 'not_possible', return null in the 'command' field and a polite reason in the 'explanation' field.
 - Use bash syntax.
 - Return only one command.
 - Avoid sudo unless absolutely necessary.
@@ -37,6 +65,19 @@ Rules:
 - If the command modifies files, still return the command. Safety confirmation is handled by the program.
 - Do not include markdown.
 - Do not include text outside the JSON object.
+
+You may be given recent conversation history for the current session. The
+user's new instruction can be a follow-up that refers to an earlier turn
+(for example "now sort them by date", "no, i meant latest first", or "undo
+that"). When it is a follow-up, build on the previous turn instead of starting
+from scratch. In particular:
+- "modify it to do Y" / "make it also do Z" means take the previous command (or
+  the command you described in a previous answer) and return an updated
+  'command'.
+- "run it" / "execute it" / "do it" means return the command from the previous
+  turn (or the one you suggested in your previous answer) as a 'command' so it
+  can be executed now.
+If the new instruction is unrelated to the history, ignore the history.
 """
 
 
@@ -45,7 +86,7 @@ RESPONSE_SCHEMA = {
     "properties": {
         "type": {
             "type": "string",
-            "enum": ["command", "not_possible"],
+            "enum": ["command", "answer", "not_possible", "clarification"],
         },
         "command": {
             "type": ["string", "null"],
@@ -53,8 +94,18 @@ RESPONSE_SCHEMA = {
         "explanation": {
             "type": ["string", "null"],
         },
+        "answer": {
+            "type": ["string", "null"],
+        },
+        "question": {
+            "type": ["string", "null"],
+        },
+        "options": {
+            "type": ["array", "null"],
+            "items": {"type": "string"},
+        },
     },
-    "required": ["type", "command", "explanation"],
+    "required": ["type", "command", "explanation", "answer", "question", "options"],
     "additionalProperties": False,
 }
 
@@ -63,7 +114,7 @@ SINGLE_SHOT_BASH_RESPONSE_TOOL = {
     "type": "function",
     "function": {
         "name": "generate_bash_command",
-        "description": "Return either one bash command for the user request, or explain why the request is not possible as a bash command.",
+        "description": "Return one bash command to run, a plain-language answer to a question, a clarifying question when the request is genuinely ambiguous, or a polite note when the request cannot be helped with.",
         "parameters": RESPONSE_SCHEMA,
     },
 }
@@ -85,6 +136,17 @@ def _normalize_bash_response(data: dict) -> str:
             "explanation": str(explanation).strip(),
         }
 
+    elif response_type == "answer":
+        answer = data.get("answer") or data.get("explanation")
+        if not answer:
+            raise ValueError("Tool response type is 'answer' but answer is empty")
+
+        normalized = {
+            "type": "answer",
+            "command": None,
+            "answer": str(answer).strip(),
+        }
+
     elif response_type == "not_possible":
         explanation = data.get("explanation") or data.get("answer")
         if not explanation:
@@ -96,16 +158,45 @@ def _normalize_bash_response(data: dict) -> str:
             "explanation": str(explanation).strip(),
         }
 
+    elif response_type == "clarification":
+        question = data.get("question") or data.get("explanation")
+        if not question:
+            raise ValueError("Tool response type is 'clarification' but question is empty")
+
+        options = data.get("options") or []
+        if not isinstance(options, list):
+            options = []
+
+        normalized = {
+            "type": "clarification",
+            "command": None,
+            "question": str(question).strip(),
+            "options": [str(o).strip() for o in options if str(o).strip()],
+        }
+
     else:
         raise ValueError(f"Unsupported response type from LLM: {response_type}")
 
     return json.dumps(normalized, ensure_ascii=False)
 
 
-def _build_bash_messages(instruction: str) -> List[Dict[str, str]]:
-    """Build the shared chat message list for bash command generation."""
+def _build_bash_messages(
+    instruction: str,
+    history_context: Optional[str] = None,
+) -> List[Dict[str, str]]:
+    """
+    Build the shared chat message list for bash command generation.
+
+    When history_context is provided it is appended to the system prompt so
+    that all model paths (tool calling, structured output, prompt fallback)
+    receive the same conversational context.
+    """
+    system_content = SYSTEM_PROMPT
+    if history_context:
+        system_content = f"{SYSTEM_PROMPT}\n\n{history_context}"
+
     return [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_content},
         {"role": "user", "content": instruction},
     ]
 
@@ -236,7 +327,10 @@ def _validate_api_keys(config: DoItConfig, model_id: str) -> None:
             raise Exception("ANTHROPIC_API_KEY environment variable is not set. Please set it before using Claude models.")
 
 
-def call_llm_for_bash_single_shot(instruction: str) -> str:
+def call_llm_for_bash_single_shot(
+    instruction: str,
+    history_context: Optional[str] = None,
+) -> str:
     """
     Send a natural language instruction through the current single-shot tool-forced path.
 
@@ -250,7 +344,7 @@ def call_llm_for_bash_single_shot(instruction: str) -> str:
     try:
         response = litellm.completion(
             model=model_id,
-            messages=_build_bash_messages(instruction),
+            messages=_build_bash_messages(instruction, history_context),
             temperature=temperature,
             max_tokens=max_tokens,
             tools=[SINGLE_SHOT_BASH_RESPONSE_TOOL],
@@ -272,9 +366,12 @@ def call_llm_for_bash_single_shot(instruction: str) -> str:
         raise Exception(f"LiteLLM tool call error: {str(e)}")
 
 
-def call_llm_for_bash_toolcalling(instruction: str) -> str:
+def call_llm_for_bash_toolcalling(
+    instruction: str,
+    history_context: Optional[str] = None,
+) -> str:
     """Backward-compatible wrapper for the current single-shot tool-forced path."""
-    return call_llm_for_bash_single_shot(instruction)
+    return call_llm_for_bash_single_shot(instruction, history_context)
 
 
 def call_llm_for_bash_tool_loop(instruction: str) -> str:
@@ -287,27 +384,30 @@ def call_llm_for_bash_tool_loop(instruction: str) -> str:
     raise NotImplementedError("Multi-turn tool loop is not implemented yet.")
 
 
-def call_llm_for_bash(instruction: str) -> str:
+def call_llm_for_bash(
+    instruction: str,
+    history_context: Optional[str] = None,
+) -> str:
     """
     Send a natural language instruction to the LLM and get structured JSON response.
     Uses LiteLLM to support multiple model providers.
-    
+
     Returns:
         Raw JSON string from the LLM.
-        
+
     Raises:
         Exception: If API call fails or configuration is invalid.
     """
     config = get_config()
-    
+
     model_id, temperature, max_tokens = _get_completion_settings(config)
-    
+
     try:
         # Use LiteLLM's completion endpoint
         # This works with API models and local models (via ollama)
         response = litellm.completion(
             model=model_id,
-            messages=_build_bash_messages(instruction),
+            messages=_build_bash_messages(instruction, history_context),
             temperature=temperature,
             max_tokens=max_tokens,
             response_format={
@@ -330,7 +430,10 @@ def call_llm_for_bash(instruction: str) -> str:
         raise Exception(f"LiteLLM error: {str(e)}")
 
 
-def call_llm_for_bash_prompt_fallback(instruction: str) -> str:
+def call_llm_for_bash_prompt_fallback(
+    instruction: str,
+    history_context: Optional[str] = None,
+) -> str:
     """
     Fallback for models or API versions where json_object structured output fails.
     Uses prompt-based JSON generation instead.
@@ -338,52 +441,183 @@ def call_llm_for_bash_prompt_fallback(instruction: str) -> str:
     config = get_config()
     model_id, temperature, max_tokens = _get_completion_settings(config)
 
+    system_content = SYSTEM_PROMPT
+    if history_context:
+        system_content = f"{SYSTEM_PROMPT}\n\n{history_context}"
+
     fallback_prompt = f"""
     Return only valid JSON.
 
     Allowed formats:
 
-    Command:
+    Command (the user wants an action run in the shell):
     {{
     "type": "command",
     "command": "the bash command",
     "explanation": "brief explanation"
     }}
 
-    Not possible:
+    Answer (the user is asking a question or wants information/explanation/conversation):
+    {{
+    "type": "answer",
+    "command": null,
+    "answer": "a helpful, direct plain-language answer; example commands may appear here but are not executed"
+    }}
+
+    Not possible (only when neither a command nor an answer can help):
     {{
     "type": "not_possible",
     "command": null,
-    "explanation": "why it is not possible as a bash command"
+    "explanation": "why it cannot be helped with"
+    }}
+
+    Clarification (use only when the request is genuinely ambiguous):
+    {{
+    "type": "clarification",
+    "command": null,
+    "question": "the single question to ask the user",
+    "options": ["option 1", "option 2"]
     }}
 
     User instruction:
     {instruction}
     """
 
-    response = litellm.completion(
-        model=model_id,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": fallback_prompt},
-        ],
-        temperature=temperature,
-        max_tokens=max_tokens,
+    strict_reminder = (
+        "\n\nRespond with the JSON object ONLY. No markdown, no code fences, "
+        "no language tags (such as ```bash), and no text before or after the JSON."
     )
 
-    content = response.choices[0].message.content.strip()
-    return _normalize_bash_response(extract_json_from_response(content))
+    last_content = ""
+    for attempt in range(2):
+        prompt = fallback_prompt if attempt == 0 else fallback_prompt + strict_reminder
+        response = litellm.completion(
+            model=model_id,
+            messages=[
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
+        last_content = response.choices[0].message.content.strip()
+        try:
+            return _normalize_bash_response(extract_json_from_response(last_content))
+        except ResponseParseError:
+            continue
+
+    # The model never produced JSON (common with small local models). If it
+    # answered with a bare shell command, salvage it instead of failing. Whether
+    # we treat that command as executable or as a suggestion depends on how the
+    # user phrased the request (a question vs. an action).
+    salvaged = _salvage_bare_command(last_content, instruction)
+    if salvaged is not None:
+        return _normalize_bash_response(salvaged)
+
+    # Re-raise the parse error so the caller can surface a useful message.
+    return _normalize_bash_response(extract_json_from_response(last_content))
+
+
+_QUESTION_WORDS = (
+    "how", "what", "why", "when", "where", "which", "who", "whom", "whose",
+    "can", "could", "would", "should", "do", "does", "did", "is", "are",
+    "am", "was", "were", "explain", "tell",
+)
+
+
+def _instruction_wants_action(instruction: str) -> bool:
+    """
+    Decide whether the user asked for an action to run vs. asked a question.
+
+    Returns True when the request reads like an imperative action ("list the
+    files", "find .txt files"), and False when it reads like a question or a
+    request for information ("how do I find .txt files?"). When unclear we
+    return False, because executing on an ambiguous request is the unsafe
+    direction.
+    """
+    text = instruction.strip().lower()
+    if not text:
+        return False
+
+    # A trailing question mark is a strong signal of a question.
+    if text.endswith("?"):
+        return False
+
+    # Leading question words signal a question even without punctuation.
+    first_word = re.split(r"[^a-z]+", text, maxsplit=1)[0]
+    if first_word in _QUESTION_WORDS:
+        return False
+
+    return True
+
+
+def _salvage_bare_command(
+    content: str,
+    instruction: str = "",
+) -> Optional[Dict[str, Any]]:
+    """
+    Recover a usable response from a non-JSON model reply that contains only a
+    shell command, optionally wrapped in a Markdown code fence
+    (e.g. ```bash\\n<command>\\n```).
+
+    The recovered command is treated as executable only when ``instruction``
+    reads like an action request; for questions (or when intent is unclear) it
+    is returned as an *answer* suggestion so it is shown but never run. We reach
+    this path because the model failed to follow the structured protocol, so the
+    safe default is to inform rather than execute.
+
+    Returns a command- or answer-shaped dict, or None when no plausible command
+    is found.
+    """
+    text = content.strip()
+
+    fence_match = re.search(r"```[a-zA-Z0-9]*\s*\n?([\s\S]*?)\n?```", text)
+    if fence_match:
+        text = fence_match.group(1).strip()
+
+    # Keep the first non-empty, non-comment line — a single command, not prose.
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    lines = [line for line in lines if not line.startswith("#")]
+    if len(lines) != 1:
+        return None
+
+    command = lines[0]
+    # Reject obvious prose: a real one-line command should not end with
+    # sentence punctuation.
+    if command.endswith((".", "?", "!", ":")):
+        return None
+
+    if _instruction_wants_action(instruction):
+        return {
+            "type": "command",
+            "command": command,
+            "explanation": "Recovered from a non-JSON model response.",
+        }
+
+    return {
+        "type": "answer",
+        "command": None,
+        "answer": f"You can use this command:\n\n    {command}",
+    }
 
 
 def call_llm_with_fallback(
     instruction: str,
     max_retries: int = 2,
+    history_context: Optional[str] = None,
 ) -> Optional[str]:
     """
     Try tool calling first, then structured JSON output, then prompt-based JSON.
 
     This keeps the public return value unchanged: a JSON string with
     type, command, and explanation fields.
+
+    Args:
+        instruction: The user's natural language request.
+        max_retries: Retries for the tool-calling path.
+        history_context: Optional rendered conversation history to give the
+            model context for follow-up instructions.
     """
     config = get_config()
     effective_retries = max_retries or config.get_max_retries()
@@ -391,7 +625,7 @@ def call_llm_with_fallback(
     if _supports_tool_calling(config):
         for attempt in range(effective_retries):
             try:
-                return call_llm_for_bash_single_shot(instruction)
+                return call_llm_for_bash_single_shot(instruction, history_context)
             except ConfigError as e:
                 print(f"[ERROR] Configuration error: {str(e)}")
                 return None
@@ -404,16 +638,25 @@ def call_llm_with_fallback(
 
     if _supports_structured_output(config):
         try:
-            return call_llm_for_bash(instruction)
+            structured_result = call_llm_for_bash(instruction, history_context)
+            # Local backends (e.g. Ollama) do not always honor json_schema and
+            # may answer with markdown or prose instead of the required JSON.
+            # Validate before trusting it; if it is not parseable, drop to the
+            # prompt-based fallback rather than returning unusable content.
+            parse_llm_response(structured_result)
+            return structured_result
         except ConfigError as e:
             print(f"[ERROR] Configuration error: {str(e)}")
             return None
+        except ResponseParseError as parse_error:
+            print(f"[WARNING] Structured output was not valid JSON: {str(parse_error)}")
+            print("[WARNING] Trying prompt-based JSON fallback.")
         except Exception as structured_error:
             print(f"[WARNING] Structured output failed: {str(structured_error)}")
             print("[WARNING] Trying prompt-based JSON fallback.")
 
     try:
-        return call_llm_for_bash_prompt_fallback(instruction)
+        return call_llm_for_bash_prompt_fallback(instruction, history_context)
     except Exception as fallback_error:
         print(f"[ERROR] Fallback failed: {str(fallback_error)}")
         return None
