@@ -11,67 +11,117 @@ Responsibilities:
 import os
 import subprocess
 import sys
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 
 
-def handle_cd_command(command: str) -> Optional[Dict[str, Any]]:
+def is_navigation_command(command: str) -> Optional[Tuple[str, str]]:
     """
-    Handle cd commands natively in Python.
-    Changes the directory of the current process and writes to DOIT_CD_FILE
-    if it is configured in the environment, so the parent shell can navigate.
+    Check if the command is a navigation command (cd, pushd, popd).
+    
+    Returns:
+        A tuple of (cmd_name, arguments_str) if it matches, else None.
     """
     cleaned = command.strip()
-    
-    # Check if it's a simple cd command (no metacharacters)
-    if not ((cleaned.startswith("cd ") or cleaned == "cd") and not any(char in cleaned for char in ["&&", ";", "|", ">", "<"])):
+    parts = cleaned.split(None, 1)
+    if not parts:
         return None
         
-    parts = cleaned.split(None, 1)
-    if len(parts) == 1:
-        target_dir = os.path.expanduser("~")
-        path_str = "~"
-    else:
-        path_str = parts[1].strip()
-        # Strip matching quotes if present
-        if (path_str.startswith('"') and path_str.endswith('"')) or (path_str.startswith("'") and path_str.endswith("'")):
-            path_str = path_str[1:-1]
-        target_dir = os.path.expanduser(path_str)
+    cmd_name = parts[0]
+    if cmd_name not in ("cd", "pushd", "popd"):
+        return None
         
-    try:
-        target_dir = os.path.abspath(target_dir)
-        if not os.path.exists(target_dir):
+    args_str = parts[1].strip() if len(parts) > 1 else ""
+    return cmd_name, args_str
+
+
+def parse_navigation_path(args_str: str) -> str:
+    """
+    Resolve and clean the target directory path by stripping quotes,
+    expanding tildes (~), and expanding environment variables.
+    """
+    if not args_str:
+        return os.path.expanduser("~")
+        
+    # Strip matching leading and trailing quotes if present
+    if (args_str.startswith('"') and args_str.endswith('"')) or (args_str.startswith("'") and args_str.endswith("'")):
+        args_str = args_str[1:-1]
+        
+    # Expand tilde (~) and environment variables (e.g. $VAR)
+    expanded = os.path.expandvars(os.path.expanduser(args_str.strip()))
+    return os.path.abspath(expanded)
+
+
+def execute_process_navigation(cmd_name: str, target_path: str) -> None:
+    """
+    Apply directory navigation to the current Python process context.
+    This ensures subsequent commands in the same execution run in the updated CWD.
+    """
+    if cmd_name in ("cd", "pushd"):
+        if os.path.exists(target_path):
+            os.chdir(target_path)
+
+
+def write_shell_navigation(shell_cmd: str) -> None:
+    """
+    Write the navigation command to DOIT_CD_FILE so the parent shell can execute it.
+    """
+    cd_file = os.environ.get("DOIT_CD_FILE")
+    if cd_file:
+        try:
+            with open(cd_file, "w", encoding="utf-8") as f:
+                f.write(shell_cmd)
+        except Exception:
+            pass
+
+
+def handle_navigation_command(command: str) -> Optional[Dict[str, Any]]:
+    """
+    Identify and execute navigation commands natively in the Python process
+    and propagate them to the parent shell.
+    
+    Returns:
+        A dict with returncode and output if handled, else None if not a navigation command.
+    """
+    nav_info = is_navigation_command(command)
+    if nav_info is None:
+        return None
+        
+    cmd_name, args_str = nav_info
+    
+    # 1. Resolve target path (only needed for cd, and pushd with args)
+    target_path = ""
+    if cmd_name in ("cd", "pushd"):
+        if cmd_name == "cd" or args_str:
+            target_path = parse_navigation_path(args_str)
+            if not os.path.exists(target_path):
+                return {
+                    "stdout": "",
+                    "stderr": f"{cmd_name}: no such file or directory: {args_str}",
+                    "returncode": 1,
+                    "timeout": False,
+                }
+                
+    # 2. Change current Python process directory
+    if target_path:
+        try:
+            execute_process_navigation(cmd_name, target_path)
+        except Exception as e:
             return {
                 "stdout": "",
-                "stderr": f"cd: no such file or directory: {path_str}",
+                "stderr": f"{cmd_name}: {str(e)}",
                 "returncode": 1,
                 "timeout": False,
             }
             
-        # Change current directory of the Python process itself
-        os.chdir(target_dir)
-        
-        # If running in a shell wrapper that set DOIT_CD_FILE, write to it
-        cd_file = os.environ.get("DOIT_CD_FILE")
-        if cd_file:
-            try:
-                with open(cd_file, "w") as f:
-                    f.write(target_dir)
-            except Exception:
-                pass
-                
-        return {
-            "stdout": "",
-            "stderr": "",
-            "returncode": 0,
-            "timeout": False,
-        }
-    except Exception as e:
-        return {
-            "stdout": "",
-            "stderr": f"cd: {str(e)}",
-            "returncode": 1,
-            "timeout": False,
-        }
+    # 3. Propagate to parent shell
+    write_shell_navigation(command.strip())
+    
+    return {
+        "stdout": "",
+        "stderr": "",
+        "returncode": 0,
+        "timeout": False,
+    }
 
 
 def run_shell_command(command: str, shell: str = "/bin/bash", timeout: int = 20) -> Dict[str, Any]:
@@ -91,9 +141,9 @@ def run_shell_command(command: str, shell: str = "/bin/bash", timeout: int = 20)
         - timeout: Whether command timed out
     """
     # Try handling cd natively
-    cd_result = handle_cd_command(command)
-    if cd_result is not None:
-        return cd_result
+    nav_result = handle_navigation_command(command)
+    if nav_result is not None:
+        return nav_result
 
     result = {
         "stdout": "",

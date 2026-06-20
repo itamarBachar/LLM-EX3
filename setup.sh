@@ -53,14 +53,74 @@ else
     fi
 fi
 
+install_shell_integration() {
+    echo "🔧 Installing shell integration..."
+    local doit_dir="$HOME/.doit"
+    mkdir -p "$doit_dir"
+    
+    local integration_file="$doit_dir/shell_integration.sh"
+    cat << 'EOF' > "$integration_file"
+# DoIt Shell Navigation Integration (supports cd, pushd, popd)
+doit() {
+    # Create a temporary file to hold the navigation command
+    local cd_file=$(mktemp)
+    export DOIT_CD_FILE="$cd_file"
+    
+    # Run the real 'doit' executable
+    command doit "$@"
+    local exit_code=$?
+    
+    # If the python process wrote a navigation command, evaluate it
+    if [ -f "$cd_file" ] && [ -s "$cd_file" ]; then
+        local cmd=$(cat "$cd_file")
+        eval "$cmd"
+    fi
+    
+    rm -f "$cd_file"
+    unset DOIT_CD_FILE
+    return $exit_code
+}
+EOF
+    chmod +x "$integration_file"
+
+    local integration_line="[ -f \"\$HOME/.doit/shell_integration.sh\" ] && source \"\$HOME/.doit/shell_integration.sh\""
+    
+    # Check ~/.bashrc
+    if [ -f "$HOME/.bashrc" ]; then
+        if ! grep -q "shell_integration.sh" "$HOME/.bashrc"; then
+            echo "" >> "$HOME/.bashrc"
+            echo "# Added by DoIt installation" >> "$HOME/.bashrc"
+            echo "$integration_line" >> "$HOME/.bashrc"
+            echo "✓ Added shell integration to ~/.bashrc"
+        else
+            echo "✓ Shell integration already configured in ~/.bashrc"
+        fi
+    fi
+    
+    # Check ~/.zshrc
+    if [ -f "$HOME/.zshrc" ]; then
+        if ! grep -q "shell_integration.sh" "$HOME/.zshrc"; then
+            echo "" >> "$HOME/.zshrc"
+            echo "# Added by DoIt installation" >> "$HOME/.zshrc"
+            echo "$integration_line" >> "$HOME/.zshrc"
+            echo "✓ Added shell integration to ~/.zshrc"
+        else
+            echo "✓ Shell integration already configured in ~/.zshrc"
+        fi
+    fi
+}
+
+install_shell_integration
+
 echo ""
 echo "✅ Installation complete!"
 echo ""
 echo "📝 Required setup:"
-echo "   1. Configuration: Copy doit.cfg to ~/doit.cfg (if not already done)"
-echo "      cp \"$SCRIPT_DIR/doit.cfg\" ~/doit.cfg"
-echo "   2. API Key:"
+echo "   1. API Key:"
 echo "      - OpenAI: export OPENAI_API_KEY='your-openai-key'"
 echo "      - Gemini: export GEMINI_API_KEY='your-gemini-key'"
 echo "      (Add to ~/.bashrc or ~/.zshrc to persist across sessions)"
+echo "   2. Reload shell config to enable navigation (cd/pushd/popd) support:"
+echo "      source ~/.bashrc"
+echo "      (or source ~/.zshrc)"
 echo ""
