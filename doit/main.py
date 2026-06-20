@@ -68,6 +68,18 @@ Examples:
         help="Clear the conversation history for the current session and exit",
     )
 
+    parser.add_argument(
+        "--clear-memories",
+        action="store_true",
+        help="Clear all persistent memories and exit",
+    )
+
+    parser.add_argument(
+        "--show-memories",
+        action="store_true",
+        help="Show all saved persistent memories and exit",
+    )
+
     return parser.parse_args()
 
 
@@ -155,6 +167,28 @@ def build_clarified_instruction(original: str, exchanges: list) -> str:
     return "\n".join(lines)
 
 
+def process_response_memories(parsed_response: dict, verbose: bool = False) -> None:
+    """Extract and apply any memory updates returned by the LLM."""
+    try:
+        from doit.config import get_config
+        if not get_config().is_memory_enabled():
+            return
+    except Exception:
+        pass
+
+    new_memories = parsed_response.get("new_memories") or []
+    forget_memories = parsed_response.get("forget_memories") or []
+    
+    if new_memories or forget_memories:
+        from doit import memory
+        memory.update_memories(new_memories, forget_memories)
+        if verbose:
+            if new_memories:
+                print(f"[DEBUG] Memory added: {new_memories}")
+            if forget_memories:
+                print(f"[DEBUG] Memory forgotten: {forget_memories}")
+
+
 def main() -> int:
     # Load environment variables
     dotenv.load_dotenv()
@@ -172,6 +206,26 @@ def main() -> int:
             print("🧹 Cleared conversation history.")
         else:
             print("No conversation history to clear.")
+        return 0
+
+    if args.clear_memories:
+        from doit import memory
+        cleared = memory.clear_memories()
+        if cleared:
+            print("🧹 Cleared all persistent memories.")
+        else:
+            print("No persistent memories to clear.")
+        return 0
+
+    if args.show_memories:
+        from doit import memory
+        memories = memory.load_memories()
+        if memories:
+            print("🧠 Saved persistent memories:")
+            for m in memories:
+                print(f"  - {m}")
+        else:
+            print("No persistent memories saved yet.")
         return 0
 
     if not args.instruction:
@@ -194,6 +248,19 @@ def main() -> int:
         if args.verbose and history_context:
             print(f"[DEBUG] Loaded {len(recent_turns)} prior turn(s) as context.\n")
 
+    # Load memory context if enabled.
+    memory_context = None
+    try:
+        if get_config().is_memory_enabled():
+            from doit import memory
+            memories = memory.load_memories()
+            memory_context = memory.format_memories_for_prompt(memories) or None
+            if args.verbose and memory_context:
+                print(f"[DEBUG] Loaded {len(memories)} persistent memories.\n")
+    except Exception as e:
+        if args.verbose:
+            print(f"[DEBUG] Failed to load memory context: {e}")
+
     def record(response_type: str, **kwargs) -> None:
         """Record this turn to history when history is enabled."""
         if history_enabled:
@@ -207,7 +274,11 @@ def main() -> int:
 
     for clarification_round in range(MAX_CLARIFICATION_ROUNDS + 1):
         # print("🤔 Thinking...\n")
-        llm_response = call_llm_with_fallback(model_input, history_context=history_context)
+        llm_response = call_llm_with_fallback(
+            model_input,
+            history_context=history_context,
+            memory_context=memory_context,
+        )
 
         if llm_response is None:
             print("Error: Could not get response from LLM.")
@@ -250,6 +321,9 @@ def main() -> int:
 
         clarification_exchanges.append((question, answer))
         model_input = build_clarified_instruction(instruction, clarification_exchanges)
+
+    # Process memories for the final response
+    process_response_memories(parsed_response, args.verbose)
 
     if is_answer_response(parsed_response):
         answer = parsed_response.get("answer", "")

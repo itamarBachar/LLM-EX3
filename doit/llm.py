@@ -66,6 +66,13 @@ Rules:
 - Do not include markdown.
 - Do not include text outside the JSON object.
 
+Memory Rules:
+You have access to persistent memories about the user/system (listed under "Persistent memories").
+If the user's instruction provides new persistent facts or preferences, extract them into 'new_memories' as a list of clear, concise declarative statements (e.g. "The user's LLM class project folder is ~/school/llms/ass3").
+Only save persistent facts (e.g. paths, aliases, preferences, configs) - do not save transient/one-off actions or command requests.
+If a new fact contradicts or updates an existing memory, add the new fact to 'new_memories' and add the exact text of the old/outdated memory to 'forget_memories' so it can be removed.
+Always return 'new_memories' and 'forget_memories' as lists (empty if no memories are learned or forgotten).
+
 You may be given recent conversation history for the current session. The
 user's new instruction can be a follow-up that refers to an earlier turn
 (for example "now sort them by date", "no, i meant latest first", or "undo
@@ -104,8 +111,25 @@ RESPONSE_SCHEMA = {
             "type": ["array", "null"],
             "items": {"type": "string"},
         },
+        "new_memories": {
+            "type": ["array", "null"],
+            "items": {"type": "string"},
+        },
+        "forget_memories": {
+            "type": ["array", "null"],
+            "items": {"type": "string"},
+        },
     },
-    "required": ["type", "command", "explanation", "answer", "question", "options"],
+    "required": [
+        "type",
+        "command",
+        "explanation",
+        "answer",
+        "question",
+        "options",
+        "new_memories",
+        "forget_memories",
+    ],
     "additionalProperties": False,
 }
 
@@ -123,6 +147,10 @@ SINGLE_SHOT_BASH_RESPONSE_TOOL = {
 def _normalize_bash_response(data: dict) -> str:
     """Normalize parsed model output to the JSON string expected by the rest of the program."""
     response_type = data.get("type")
+
+    # Extract memory fields
+    new_memories = data.get("new_memories") or []
+    forget_memories = data.get("forget_memories") or []
 
     if response_type == "command":
         command = data.get("command")
@@ -177,23 +205,31 @@ def _normalize_bash_response(data: dict) -> str:
     else:
         raise ValueError(f"Unsupported response type from LLM: {response_type}")
 
+    # Add memory fields to normalized output
+    normalized["new_memories"] = new_memories
+    normalized["forget_memories"] = forget_memories
+
     return json.dumps(normalized, ensure_ascii=False)
 
 
 def _build_bash_messages(
     instruction: str,
     history_context: Optional[str] = None,
+    memory_context: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     """
     Build the shared chat message list for bash command generation.
 
+    When memory_context is provided it is appended to the system prompt.
     When history_context is provided it is appended to the system prompt so
     that all model paths (tool calling, structured output, prompt fallback)
     receive the same conversational context.
     """
     system_content = SYSTEM_PROMPT
+    if memory_context:
+        system_content = f"{system_content}\n\n{memory_context}"
     if history_context:
-        system_content = f"{SYSTEM_PROMPT}\n\n{history_context}"
+        system_content = f"{system_content}\n\n{history_context}"
 
     return [
         {"role": "system", "content": system_content},
@@ -330,6 +366,7 @@ def _validate_api_keys(config: DoItConfig, model_id: str) -> None:
 def call_llm_for_bash_single_shot(
     instruction: str,
     history_context: Optional[str] = None,
+    memory_context: Optional[str] = None,
 ) -> str:
     """
     Send a natural language instruction through the current single-shot tool-forced path.
@@ -344,7 +381,7 @@ def call_llm_for_bash_single_shot(
     try:
         response = litellm.completion(
             model=model_id,
-            messages=_build_bash_messages(instruction, history_context),
+            messages=_build_bash_messages(instruction, history_context, memory_context),
             temperature=temperature,
             max_tokens=max_tokens,
             tools=[SINGLE_SHOT_BASH_RESPONSE_TOOL],
@@ -369,9 +406,10 @@ def call_llm_for_bash_single_shot(
 def call_llm_for_bash_toolcalling(
     instruction: str,
     history_context: Optional[str] = None,
+    memory_context: Optional[str] = None,
 ) -> str:
     """Backward-compatible wrapper for the current single-shot tool-forced path."""
-    return call_llm_for_bash_single_shot(instruction, history_context)
+    return call_llm_for_bash_single_shot(instruction, history_context, memory_context)
 
 
 def call_llm_for_bash_tool_loop(instruction: str) -> str:
@@ -387,6 +425,7 @@ def call_llm_for_bash_tool_loop(instruction: str) -> str:
 def call_llm_for_bash(
     instruction: str,
     history_context: Optional[str] = None,
+    memory_context: Optional[str] = None,
 ) -> str:
     """
     Send a natural language instruction to the LLM and get structured JSON response.
@@ -407,7 +446,7 @@ def call_llm_for_bash(
         # This works with API models and local models (via ollama)
         response = litellm.completion(
             model=model_id,
-            messages=_build_bash_messages(instruction, history_context),
+            messages=_build_bash_messages(instruction, history_context, memory_context),
             temperature=temperature,
             max_tokens=max_tokens,
             response_format={
@@ -433,6 +472,7 @@ def call_llm_for_bash(
 def call_llm_for_bash_prompt_fallback(
     instruction: str,
     history_context: Optional[str] = None,
+    memory_context: Optional[str] = None,
 ) -> str:
     """
     Fallback for models or API versions where json_object structured output fails.
@@ -442,8 +482,10 @@ def call_llm_for_bash_prompt_fallback(
     model_id, temperature, max_tokens = _get_completion_settings(config)
 
     system_content = SYSTEM_PROMPT
+    if memory_context:
+        system_content = f"{system_content}\n\n{memory_context}"
     if history_context:
-        system_content = f"{SYSTEM_PROMPT}\n\n{history_context}"
+        system_content = f"{system_content}\n\n{history_context}"
 
     fallback_prompt = f"""
     Return only valid JSON.
@@ -454,21 +496,27 @@ def call_llm_for_bash_prompt_fallback(
     {{
     "type": "command",
     "command": "the bash command",
-    "explanation": "brief explanation"
+    "explanation": "brief explanation",
+    "new_memories": ["new fact to remember"] or null,
+    "forget_memories": ["old fact to forget"] or null
     }}
 
     Answer (the user is asking a question or wants information/explanation/conversation):
     {{
     "type": "answer",
     "command": null,
-    "answer": "a helpful, direct plain-language answer; example commands may appear here but are not executed"
+    "answer": "a helpful, direct plain-language answer",
+    "new_memories": ["new fact to remember"] or null,
+    "forget_memories": ["old fact to forget"] or null
     }}
 
     Not possible (only when neither a command nor an answer can help):
     {{
     "type": "not_possible",
     "command": null,
-    "explanation": "why it cannot be helped with"
+    "explanation": "why it cannot be helped with",
+    "new_memories": ["new fact to remember"] or null,
+    "forget_memories": ["old fact to forget"] or null
     }}
 
     Clarification (use only when the request is genuinely ambiguous):
@@ -476,7 +524,9 @@ def call_llm_for_bash_prompt_fallback(
     "type": "clarification",
     "command": null,
     "question": "the single question to ask the user",
-    "options": ["option 1", "option 2"]
+    "options": ["option 1", "option 2"],
+    "new_memories": ["new fact to remember"] or null,
+    "forget_memories": ["old fact to forget"] or null
     }}
 
     User instruction:
@@ -593,12 +643,16 @@ def _salvage_bare_command(
             "type": "command",
             "command": command,
             "explanation": "Recovered from a non-JSON model response.",
+            "new_memories": [],
+            "forget_memories": [],
         }
 
     return {
         "type": "answer",
         "command": None,
         "answer": f"You can use this command:\n\n    {command}",
+        "new_memories": [],
+        "forget_memories": [],
     }
 
 
@@ -606,6 +660,7 @@ def call_llm_with_fallback(
     instruction: str,
     max_retries: int = 2,
     history_context: Optional[str] = None,
+    memory_context: Optional[str] = None,
 ) -> Optional[str]:
     """
     Try tool calling first, then structured JSON output, then prompt-based JSON.
@@ -618,6 +673,7 @@ def call_llm_with_fallback(
         max_retries: Retries for the tool-calling path.
         history_context: Optional rendered conversation history to give the
             model context for follow-up instructions.
+        memory_context: Optional rendered persistent memory context.
     """
     config = get_config()
     effective_retries = max_retries or config.get_max_retries()
@@ -625,7 +681,7 @@ def call_llm_with_fallback(
     if _supports_tool_calling(config):
         for attempt in range(effective_retries):
             try:
-                return call_llm_for_bash_single_shot(instruction, history_context)
+                return call_llm_for_bash_single_shot(instruction, history_context, memory_context)
             except ConfigError as e:
                 print(f"[ERROR] Configuration error: {str(e)}")
                 return None
@@ -638,7 +694,7 @@ def call_llm_with_fallback(
 
     if _supports_structured_output(config):
         try:
-            structured_result = call_llm_for_bash(instruction, history_context)
+            structured_result = call_llm_for_bash(instruction, history_context, memory_context)
             # Local backends (e.g. Ollama) do not always honor json_schema and
             # may answer with markdown or prose instead of the required JSON.
             # Validate before trusting it; if it is not parseable, drop to the
@@ -656,7 +712,7 @@ def call_llm_with_fallback(
             print("[WARNING] Trying prompt-based JSON fallback.")
 
     try:
-        return call_llm_for_bash_prompt_fallback(instruction, history_context)
+        return call_llm_for_bash_prompt_fallback(instruction, history_context, memory_context)
     except Exception as fallback_error:
         print(f"[ERROR] Fallback failed: {str(fallback_error)}")
         return None

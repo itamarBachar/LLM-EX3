@@ -201,6 +201,10 @@ def parse_llm_response(raw_response: str) -> Dict[str, Any]:
             parsed["question"] = ""
         if parsed.get("options") is None:
             parsed["options"] = []
+        if parsed.get("new_memories") is None:
+            parsed["new_memories"] = []
+        if parsed.get("forget_memories") is None:
+            parsed["forget_memories"] = []
             
         return parsed
     except ResponseParseError:

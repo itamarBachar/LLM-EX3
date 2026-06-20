@@ -117,6 +117,12 @@ class DoItConfig:
     def get_history_limit(self) -> int:
         """How many recent turns to include as context on each invocation."""
         return self.config.getint("history", "max_turns", fallback=10)
+
+    def is_memory_enabled(self) -> bool:
+        """Whether persistent memory is enabled."""
+        if "memory" in self.config:
+            return self.config.getboolean("memory", "enabled", fallback=True)
+        return True
     
     def has_tool_calling_support(self) -> bool:
         """Check if the current model supports tool calling."""
