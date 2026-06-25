@@ -69,7 +69,7 @@ This is the default configuration. All you need is an API key.
         ```bash
         export GEMINI_API_KEY="your-gemini-key"
         ```
-    To make it permanent, add this line to your `~/.bashrc` or `~/.zshrc` file.
+    To make it permanent, add this line to your `~/.bashrc` file.
 
 2.  **Verify your configuration** in `~/doit.cfg`:
     ```ini

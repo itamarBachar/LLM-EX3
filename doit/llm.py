@@ -19,6 +19,7 @@ from doit.response_parser import (
     parse_llm_response,
     ResponseParseError,
 )
+from doit.history_tracker import load_recent_shell_history, format_shell_history_for_prompt
 
 
 SYSTEM_PROMPT = """
@@ -81,10 +82,12 @@ from scratch. In particular:
 - "modify it to do Y" / "make it also do Z" means take the previous command (or
   the command you described in a previous answer) and return an updated
   'command'.
-- "run it" / "execute it" / "do it" means return the command from the previous
-  turn (or the one you suggested in your previous answer) as a 'command' so it
-  can be executed now.
 If the new instruction is unrelated to the history, ignore the history.
+
+User Awareness (Recent Manual Shell Commands):
+You may be provided with a list of recent manual shell commands executed by the user in their active terminal session.
+Use this list to understand the user's current context (for instance, what directory they recently navigated to, what folders they created, or what scripts they ran manually).
+If they ask questions like "what did I just do?" or "summarize my recent actions", construct a clear answer based on this list.
 """
 
 
@@ -230,6 +233,11 @@ def _build_bash_messages(
         system_content = f"{system_content}\n\n{memory_context}"
     if history_context:
         system_content = f"{system_content}\n\n{history_context}"
+
+    shell_cmds = load_recent_shell_history()
+    shell_history_context = format_shell_history_for_prompt(shell_cmds)
+    if shell_history_context:
+        system_content = f"{system_content}\n\n{shell_history_context}"
 
     return [
         {"role": "system", "content": system_content},
@@ -486,6 +494,11 @@ def call_llm_for_bash_prompt_fallback(
         system_content = f"{system_content}\n\n{memory_context}"
     if history_context:
         system_content = f"{system_content}\n\n{history_context}"
+
+    shell_cmds = load_recent_shell_history()
+    shell_history_context = format_shell_history_for_prompt(shell_cmds)
+    if shell_history_context:
+        system_content = f"{system_content}\n\n{shell_history_context}"
 
     fallback_prompt = f"""
     Return only valid JSON.

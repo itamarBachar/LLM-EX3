@@ -60,8 +60,45 @@ install_shell_integration() {
     
     local integration_file="$doit_dir/shell_integration.sh"
     cat << 'EOF' > "$integration_file"
-# DoIt Shell Navigation Integration (supports cd, pushd, popd)
+# DoIt Shell Navigation Integration (supports cd, pushd, popd, user awareness & multi-tasking)
+
+if [ -n "$BASH_VERSION" ]; then
+    # 1. Initialize session ID for Bash
+    if [ -z "$DOIT_SESSION_ID" ]; then
+        export DOIT_SESSION_ID="session_$(tty | tr -d '/')_$(date +%s)_$RANDOM"
+    fi
+
+    # 2. Setup prompt command hook for Bash
+    doit_prompt_command() {
+        # Temporarily clear HISTTIMEFORMAT to ensure consistent output format from history 1
+        local old_timeformat="$HISTTIMEFORMAT"
+        export HISTTIMEFORMAT=""
+        local last_hist=$(history 1)
+        export HISTTIMEFORMAT="$old_timeformat"
+
+        # Extract command number and command text
+        local cmd_num=$(echo "$last_hist" | awk '{print $1}')
+        local last_cmd=$(echo "$last_hist" | sed 's/^[ ]*[0-9]*[ ]*//')
+
+        if [ -n "$DOIT_SESSION_ID" ] && [ -n "$cmd_num" ] && [ -n "$last_cmd" ] && [ "$cmd_num" != "$DOIT_LAST_LOGGED_NUM" ]; then
+            export DOIT_LAST_LOGGED_NUM="$cmd_num"
+            # Filter out 'doit' invocations
+            if [[ ! "$last_cmd" =~ ^[[:space:]]*doit ]]; then
+                mkdir -p "$HOME/.doit/sessions"
+                echo "$last_cmd" >> "$HOME/.doit/sessions/$DOIT_SESSION_ID.log"
+            fi
+        fi
+    }
+
+    # Register the prompt command safely
+    if [[ "$PROMPT_COMMAND" != *doit_prompt_command* ]]; then
+        PROMPT_COMMAND="doit_prompt_command${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
+    fi
+fi
+
 doit() {
+    # Flush history before execution so doit sees recent manual commands
+    history -a
     # Create a temporary file to hold the navigation command
     local cd_file=$(mktemp)
     export DOIT_CD_FILE="$cd_file"
@@ -73,7 +110,11 @@ doit() {
     # If the python process wrote a navigation command, evaluate it
     if [ -f "$cd_file" ] && [ -s "$cd_file" ]; then
         local cmd=$(cat "$cd_file")
-        eval "$cmd"
+        # Prefix with a space and use ignorespace to avoid logging to bash history
+        local old_histcontrol="$HISTCONTROL"
+        export HISTCONTROL="ignorespace"
+        eval " $cmd"
+        export HISTCONTROL="$old_histcontrol"
     fi
     
     rm -f "$cd_file"
@@ -97,17 +138,6 @@ EOF
         fi
     fi
     
-    # Check ~/.zshrc
-    if [ -f "$HOME/.zshrc" ]; then
-        if ! grep -q "shell_integration.sh" "$HOME/.zshrc"; then
-            echo "" >> "$HOME/.zshrc"
-            echo "# Added by DoIt installation" >> "$HOME/.zshrc"
-            echo "$integration_line" >> "$HOME/.zshrc"
-            echo "✓ Added shell integration to ~/.zshrc"
-        else
-            echo "✓ Shell integration already configured in ~/.zshrc"
-        fi
-    fi
 }
 
 install_shell_integration
@@ -119,8 +149,7 @@ echo "📝 Required setup:"
 echo "   1. API Key:"
 echo "      - OpenAI: export OPENAI_API_KEY='your-openai-key'"
 echo "      - Gemini: export GEMINI_API_KEY='your-gemini-key'"
-echo "      (Add to ~/.bashrc or ~/.zshrc to persist across sessions)"
+echo "      (Add to ~/.bashrc to persist across sessions)"
 echo "   2. Reload shell config to enable navigation (cd/pushd/popd) support:"
 echo "      source ~/.bashrc"
-echo "      (or source ~/.zshrc)"
 echo ""

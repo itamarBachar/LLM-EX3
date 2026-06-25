@@ -23,6 +23,7 @@ from doit.safety import should_execute_command
 from doit.command_executor import execute_and_display
 from doit import history
 from doit.config import get_config, ConfigError
+from doit.session import get_session_id, clear_session_history
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -202,6 +203,13 @@ def main() -> int:
 
     if args.clear_history:
         cleared = history.clear_history()
+        
+        # Clear session history if we have a session ID
+        session_id = get_session_id()
+        if session_id:
+            if clear_session_history(session_id):
+                    cleared = True
+
         if cleared:
             print("🧹 Cleared conversation history.")
         else:
