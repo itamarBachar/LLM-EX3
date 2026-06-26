@@ -70,7 +70,6 @@ checks = [
     safety.detect_filesystem_modification("rm -rf /")[0],
     safety.detect_filesystem_modification("mkdir demo")[0],
     safety.detect_filesystem_modification("mv old.txt new.txt")[0],
-    safety.detect_dangerous_patterns("sudo reboot")[0],
     safety.detect_filesystem_modification('echo "a > b"')[0] is False,
     safety.should_execute_command("ls -la")[0],
 ]

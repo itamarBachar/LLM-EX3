@@ -21,7 +21,9 @@ Design:
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+from doit.session import get_session_id
 
 
 def get_history_dir() -> Path:
@@ -32,8 +34,24 @@ def get_history_dir() -> Path:
 
 
 def _history_file() -> Path:
-    """Return the single JSONL history file path."""
+    """Return the JSONL history file path, using session-specific path under the sessions/ directory if session ID is present."""
+    session_id = get_session_id()
+    if session_id:
+        sessions_dir = get_history_dir() / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        return sessions_dir / f"history_{session_id}.jsonl"
     return get_history_dir() / "history.jsonl"
+
+
+
+def _truncate_output(text: str, max_chars: int = 2000) -> str:
+    """Safely truncate large outputs to avoid bloating the history file."""
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    half = max_chars // 2
+    return f"{text[:half]}\n... [TRUNCATED] ...\n{text[-half:]}"
 
 
 def append_turn(
@@ -42,6 +60,9 @@ def append_turn(
     command: str = "",
     explanation: str = "",
     answer: str = "",
+    stdout: str = "",
+    stderr: str = "",
+    returncode: Optional[int] = None,
 ) -> None:
     """
     Record a single completed turn to the history file.
@@ -52,6 +73,9 @@ def append_turn(
         command: The shell command generated (if any).
         explanation: The model's explanation of the command (if any).
         answer: A direct textual answer (for non-command responses).
+        stdout: The captured stdout of the executed command (if any).
+        stderr: The captured stderr of the executed command (if any).
+        returncode: The return code of the executed command (if any).
     """
     entry: Dict[str, Any] = {
         "instruction": instruction,
@@ -59,6 +83,9 @@ def append_turn(
         "command": command or "",
         "explanation": explanation or "",
         "answer": answer or "",
+        "stdout": _truncate_output(stdout) if stdout else "",
+        "stderr": _truncate_output(stderr) if stderr else "",
+        "returncode": returncode if returncode is not None else None,
     }
 
     try:

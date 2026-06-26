@@ -21,7 +21,7 @@ from doit.response_parser import (
 )
 from doit.safety import should_execute_command
 from doit.command_executor import execute_and_display
-from doit import history
+from doit import history, memory
 from doit.config import get_config, ConfigError
 from doit.session import get_session_id, clear_session_history
 
@@ -171,7 +171,6 @@ def build_clarified_instruction(original: str, exchanges: list) -> str:
 def process_response_memories(parsed_response: dict, verbose: bool = False) -> None:
     """Extract and apply any memory updates returned by the LLM."""
     try:
-        from doit.config import get_config
         if not get_config().is_memory_enabled():
             return
     except Exception:
@@ -181,7 +180,6 @@ def process_response_memories(parsed_response: dict, verbose: bool = False) -> N
     forget_memories = parsed_response.get("forget_memories") or []
     
     if new_memories or forget_memories:
-        from doit import memory
         memory.update_memories(new_memories, forget_memories)
         if verbose:
             if new_memories:
@@ -217,7 +215,6 @@ def main() -> int:
         return 0
 
     if args.clear_memories:
-        from doit import memory
         cleared = memory.clear_memories()
         if cleared:
             print("🧹 Cleared all persistent memories.")
@@ -226,7 +223,6 @@ def main() -> int:
         return 0
 
     if args.show_memories:
-        from doit import memory
         memories = memory.load_memories()
         if memories:
             print("🧠 Saved persistent memories:")
@@ -260,7 +256,6 @@ def main() -> int:
     memory_context = None
     try:
         if get_config().is_memory_enabled():
-            from doit import memory
             memories = memory.load_memories()
             memory_context = memory.format_memories_for_prompt(memories) or None
             if args.verbose and memory_context:
