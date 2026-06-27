@@ -114,9 +114,14 @@ class DoItConfig:
         """Whether multi-turn history is recorded and fed back to the model."""
         return self.config.getboolean("history", "enabled", fallback=True)
 
-    def get_history_limit(self) -> int:
-        """How many recent turns to include as context on each invocation."""
-        return self.config.getint("history", "max_turns", fallback=10)
+
+    def get_history_compaction_threshold(self) -> int:
+        """The number of turns at which history compaction is triggered."""
+        return self.config.getint("history", "compaction_threshold", fallback=10)
+
+    def get_history_compaction_keep(self) -> int:
+        """The number of recent turns to keep intact after compaction."""
+        return self.config.getint("history", "compaction_keep", fallback=3)
 
     def is_memory_enabled(self) -> bool:
         """Whether persistent memory is enabled."""

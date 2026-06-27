@@ -102,7 +102,7 @@ def _history_enabled(args: argparse.Namespace) -> bool:
 def _history_limit() -> int:
     """Resolve how many recent turns to include as context."""
     try:
-        return get_config().get_history_limit()
+        return get_config().get_history_compaction_threshold()
     except ConfigError:
         return 10
 

@@ -861,3 +861,43 @@ def assess_command_risk_with_llm(
         raise Exception(f"Malformed safety response from LLM: {str(e)}")
     except Exception as e:
         raise Exception(f"LiteLLM safety check error: {str(e)}")
+
+
+def call_llm_for_history_summary(history_text: str) -> str:
+    """
+    Summarize a block of conversation history to compact it.
+    
+    Args:
+        history_text: The string representation of older conversation turns.
+        
+    Returns:
+        A concise summary string preserving user intent and context.
+    """
+    config = get_config()
+    model_id, temperature, max_tokens = _get_completion_settings(config)
+    
+    system_prompt = (
+        "You are an expert at summarizing shell conversation history. "
+        "Your goal is to compact older conversation turns into a single, concise paragraph. "
+        "Preserve important context: paths, files, user intents, preferences, and the outcome of commands. "
+        "Do not list every command literally; just capture the state of the workflow."
+    )
+    
+    try:
+        response = litellm.completion(
+            model=model_id,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Please summarize this conversation history:\n\n{history_text}"},
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"[WARNING] History summarization failed: {e}")
+        # Return a fallback that indicates summarization failed, 
+        # or maybe we could just return the original text, but since we're compacting,
+        # we can just return a generic placeholder or the raw text truncated.
+        # Here we just raise it to let the caller handle it.
+        raise

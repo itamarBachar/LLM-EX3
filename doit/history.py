@@ -24,6 +24,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from doit.session import get_session_id
+from doit.config import get_config
+from doit.llm import call_llm_for_history_summary
 
 
 def get_history_dir() -> Path:
@@ -91,9 +93,59 @@ def append_turn(
     try:
         with open(_history_file(), "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            
+        # Trigger compaction check
+        compact_history_if_needed()
     except OSError as e:
         # History is best-effort: never let a write failure break the command.
         print(f"[WARNING] Could not write history: {e}")
+
+
+def compact_history_if_needed() -> None:
+    """
+    Check if the history length exceeds the compaction threshold, and if so,
+    summarize the older turns into a single summary block using the LLM.
+    """
+    try:
+        config = get_config()
+        if not config.is_history_enabled():
+            return
+        threshold = config.get_history_compaction_threshold()
+        keep = config.get_history_compaction_keep()
+    except Exception:
+        # If we can't load config or it's missing the attributes, do nothing
+        return
+
+    turns = load_recent_turns(limit=10000)
+    if len(turns) <= threshold:
+        return
+
+    to_summarize = turns[:-keep]
+    to_keep = turns[-keep:]
+
+    text_to_summarize = format_history_for_prompt(to_summarize)
+    if not text_to_summarize:
+        return
+
+    try:
+        summary_text = call_llm_for_history_summary(text_to_summarize)
+    except Exception as e:
+        print(f"[WARNING] Could not compact history: {e}")
+        return
+
+    new_summary_turn = {
+        "type": "summary",
+        "summary": summary_text
+    }
+
+    try:
+        path = _history_file()
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(new_summary_turn, ensure_ascii=False) + "\n")
+            for t in to_keep:
+                f.write(json.dumps(t, ensure_ascii=False) + "\n")
+    except OSError as e:
+        print(f"[WARNING] Could not write compacted history: {e}")
 
 
 def load_recent_turns(limit: int = 10) -> List[Dict[str, Any]]:
@@ -153,16 +205,21 @@ def format_history_for_prompt(turns: List[Dict[str, Any]]) -> str:
     ]
 
     for i, turn in enumerate(turns, start=1):
-        lines.append(f"Turn {i}:")
-        lines.append(f"  User said: {turn.get('instruction', '').strip()}")
-
         turn_type = turn.get("type")
-        if turn_type == "command" and turn.get("command"):
-            lines.append(f"  Command produced: {turn['command'].strip()}")
-        elif turn.get("answer"):
-            lines.append(f"  Assistant answered: {turn['answer'].strip()}")
-        elif turn.get("explanation"):
-            lines.append(f"  Assistant said: {turn['explanation'].strip()}")
+        
+        if turn_type == "summary":
+            lines.append(f"Turn {i} (Compacted History):")
+            lines.append(f"  Summary of earlier conversation: {turn.get('summary', '').strip()}")
+        else:
+            lines.append(f"Turn {i}:")
+            lines.append(f"  User said: {turn.get('instruction', '').strip()}")
+
+            if turn_type == "command" and turn.get("command"):
+                lines.append(f"  Command produced: {turn['command'].strip()}")
+            elif turn.get("answer"):
+                lines.append(f"  Assistant answered: {turn['answer'].strip()}")
+            elif turn.get("explanation"):
+                lines.append(f"  Assistant said: {turn['explanation'].strip()}")
 
         lines.append("")
 
