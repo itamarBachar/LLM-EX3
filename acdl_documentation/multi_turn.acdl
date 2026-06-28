@@ -1,0 +1,16 @@
+MultiTurnAgent[@T]: {
+    S: {
+        SYSTEM_PROMPT
+        If @T > 1 {
+            CONVERSATION_HISTORY
+            ForEach(t: range(1, @T)) {
+                sys.history[@t].instruction
+                sys.history[@t].response
+            }
+        }
+    }
+    U: {
+        env.instruction[@T]
+    }
+    A: resp.bash_response[@T]
+}

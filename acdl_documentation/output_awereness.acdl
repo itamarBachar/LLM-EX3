@@ -1,0 +1,28 @@
+OutputAwarenessAgent[@T]: {
+    S: {
+        SYSTEM_PROMPT
+        If sys.memory[@T] {
+            PERSISTENT_MEMORIES(sys.memory[@T])
+        }
+        If @T > 1 {
+            CONVERSATION_HISTORY
+            ForEach(t: range(1, @T)) {
+                sys.history[@t].instruction
+                sys.history[@t].response
+                If sys.history[@t].stdout {
+                    sys.history[@t].stdout
+                }
+                If sys.history[@t].stderr {
+                    sys.history[@t].stderr
+                }
+            }
+        }
+        If sys.shell_history[@T] {
+            RECENT_MANUAL_SHELL_COMMANDS(sys.shell_history[@T])
+        }
+    }
+    U: {
+        env.instruction[@T]
+    }
+    A: resp.bash_response[@T]
+}

@@ -1,0 +1,22 @@
+ClarificationAgent[@T]: {
+    S: {
+        SYSTEM_PROMPT
+        If @T > 1 {
+            CONVERSATION_HISTORY
+            ForEach(t: range(1, @T)) {
+                sys.history[@t].instruction
+                If sys.history[@t].type == "clarification" {
+                    sys.history[@t].question
+                    sys.history[@t].options
+                }
+                Else {
+                    sys.history[@t].response
+                }
+            }
+        }
+    }
+    U: {
+        env.instruction[@T]
+    }
+    A: resp.bash_response[@T]
+}

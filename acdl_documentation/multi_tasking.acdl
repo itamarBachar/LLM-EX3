@@ -1,0 +1,22 @@
+MultiTaskingAgent[@T, session]: {
+    S: {
+        SYSTEM_PROMPT
+        If sys.memory[@T] {
+            PERSISTENT_MEMORIES(sys.memory[@T])
+        }
+        If @T > 1 {
+            CONVERSATION_HISTORY
+            ForEach(t: range(1, @T)) {
+                sys.history[@t, session].instruction
+                sys.history[@t, session].response
+            }
+        }
+        If sys.shell_history[@T, session] {
+            RECENT_MANUAL_SHELL_COMMANDS(sys.shell_history[@T, session])
+        }
+    }
+    U: {
+        env.instruction[@T, session]
+    }
+    A: resp.bash_response[@T, session]
+}

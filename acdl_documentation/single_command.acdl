@@ -1,0 +1,9 @@
+SingleCommand[@T]: {
+    S: {
+        SYSTEM_PROMPT
+    }
+    U: {
+        env.instruction[@T]
+    }
+    A: resp.bash_response[@T]
+}

@@ -1,0 +1,22 @@
+ProjectProfileAgent[@T]: {
+    S: {
+        SYSTEM_PROMPT
+        If sys.project_profile[@T] {
+            PROJECT_PROFILE(sys.project_profile[@T])
+        }
+        If sys.memory[@T] {
+            PERSISTENT_MEMORIES(sys.memory[@T])
+        }
+        If @T > 1 {
+            CONVERSATION_HISTORY
+            ForEach(t: range(1, @T)) {
+                sys.history[@t].instruction
+                sys.history[@t].response
+            }
+        }
+    }
+    U: {
+        env.instruction[@T]
+    }
+    A: resp.bash_response[@T]
+}
