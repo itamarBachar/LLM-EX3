@@ -229,6 +229,8 @@ def _build_bash_messages(
     receive the same conversational context.
     """
     system_content = SYSTEM_PROMPT
+    import ipdb
+    ipdb.set_trace()
     if memory_context:
         system_content = f"{system_content}\n\n{memory_context}"
     if history_context:
@@ -499,7 +501,6 @@ def call_llm_for_bash_prompt_fallback(
     shell_history_context = format_shell_history_for_prompt(shell_cmds)
     if shell_history_context:
         system_content = f"{system_content}\n\n{shell_history_context}"
-
     fallback_prompt = f"""
     Return only valid JSON.
 

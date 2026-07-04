@@ -216,7 +216,7 @@ def format_command_output(result: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def execute_and_display(command: str) -> int:
+def execute_and_display(command: str) -> Tuple[int, str, str]:
     """
     Execute a command and display formatted output.
 
@@ -224,7 +224,7 @@ def execute_and_display(command: str) -> int:
         command: Shell command to execute.
 
     Returns:
-        Exit code of the command.
+        A tuple containing (exit code, stdout, stderr).
     """
     print(f"\n📍 Executing: {command}\n")
 
@@ -234,4 +234,4 @@ def execute_and_display(command: str) -> int:
     print(output)
     print()
 
-    return result["returncode"]
+    return result["returncode"], result["stdout"], result["stderr"]

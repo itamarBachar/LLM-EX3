@@ -187,10 +187,8 @@ def load_recent_turns(limit: int = 10) -> List[Dict[str, Any]]:
 def format_history_for_prompt(turns: List[Dict[str, Any]]) -> str:
     """
     Render recent turns as a compact text block to prepend to the system prompt.
-
-    Only the user's instruction and the produced command/answer are included —
-    not command output (that is section 10's concern). Returns an empty string
-    when there is no history, so callers can skip injecting an empty block.
+    Returns an empty string when there is no history, so callers can skip
+    injecting an empty block.
     """
     if not turns:
         return ""
@@ -216,6 +214,23 @@ def format_history_for_prompt(turns: List[Dict[str, Any]]) -> str:
 
             if turn_type == "command" and turn.get("command"):
                 lines.append(f"  Command produced: {turn['command'].strip()}")
+                
+                # Include return code if available
+                if turn.get("returncode") is not None:
+                    lines.append(f"  Return code: {turn['returncode']}")
+                
+                # Include stdout and stderr if available
+                stdout = turn.get("stdout", "").strip()
+                if stdout:
+                    lines.append("  Standard Output:")
+                    # Indent stdout for readability
+                    lines.extend([f"    {line}" for line in stdout.split('\n')])
+                    
+                stderr = turn.get("stderr", "").strip()
+                if stderr:
+                    lines.append("  Standard Error:")
+                    lines.extend([f"    {line}" for line in stderr.split('\n')])
+
             elif turn.get("answer"):
                 lines.append(f"  Assistant answered: {turn['answer'].strip()}")
             elif turn.get("explanation"):

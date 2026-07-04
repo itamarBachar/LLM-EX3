@@ -3,7 +3,6 @@ SafetyCheck[@T]: {
         SAFETY_SYSTEM_PROMPT
     }
     U: {
-        SAFETY_PROMPT(sys.command[@T], sys.include_filesystem_modifications[@T])
+        sys.bash_command[@T]
     }
-    A: resp.safety_response[@T]
 }

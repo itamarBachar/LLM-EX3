@@ -5,5 +5,10 @@ SingleCommand[@T]: {
     U: {
         env.instruction[@T]
     }
-    A: resp.bash_response[@T]
+    If sys.call_tool {
+        A: sys.call_tool[@T].response
+    }
+    Else {
+        A: resp.not_possible[@T]
+    }
 }

@@ -363,8 +363,8 @@ def main() -> int:
             record("command", command=command, explanation=explanation)
             return 1
 
-        returncode = execute_and_display(command)
-        record("command", command=command, explanation=explanation)
+        returncode, stdout, stderr = execute_and_display(command)
+        record("command", command=command, explanation=explanation, stdout=stdout, stderr=stderr, returncode=returncode)
         return returncode
 
     print(f"Error: Unexpected response type: {parsed_response.get('type')}\n")
