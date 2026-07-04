@@ -1,7 +1,20 @@
-MemoriesAgent[@T]: {
+ClarificationRound[@T]: {
+    S: {
+        CLARIFICATION_PROMPT
+    }
+    U: {
+        sys.original_request[@T]
+    }
+    A: {
+        sys.clarification_question[@T]
+    }
+    U: {
+        sys.clarification_response[@T]
+    }
+}
+
+ClarificationAgent[@T]: {
     S: SYSTEM_PROMPT
-    S: MEMORY_SYSTEM_PROMPT
-    S: sys.memories
     S: HISTORY_SYSTEM_PROMPT
 
     If @T > 1 {
@@ -10,11 +23,6 @@ MemoriesAgent[@T]: {
             A: sys.history[@t].generated_command
         }
     }
-    S: USER_AWARENESS_PROMPT
-    ForEach(user_command: sys.user_commands) {
-        S: user_command
-    }
-
     
     // The current turn
     U: env.instruction[@T]
@@ -30,10 +38,7 @@ MemoriesAgent[@T]: {
         }
     }
     }
-    ElseIf resp.explanation{
-        A: resp.explanation[@T]
-    }
-    ElseIf resp.not_possible {
-        A: resp.not_possible_explanation[@T]
+    Else {
+        A: resp.not_possible[@T]
     }
 }

@@ -3,6 +3,11 @@ SafetyCheck[@T]: {
         SAFETY_SYSTEM_PROMPT
     }
     U: {
-        sys.bash_command[@T]
+        resp.bash_command[@T]
+    }
+    A: {
+        resp.is_safe[@T]
+        resp.reason[@T]
     }
 }
+

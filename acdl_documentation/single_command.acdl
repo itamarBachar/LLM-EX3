@@ -5,8 +5,8 @@ SingleCommand[@T]: {
     U: {
         env.instruction[@T]
     }
-    If sys.call_tool {
-        A: sys.call_tool[@T].response
+    If resp.call_tool {
+        A: resp.call_tool[@T].response
     }
     Else {
         A: resp.not_possible[@T]

@@ -1,16 +1,21 @@
 MultiTurnAgent[@T]: {
-    S: {
-        SYSTEM_PROMPT
-        If @T > 1 {
-            CONVERSATION_HISTORY
-            ForEach(t: range(1, @T)) {
-                sys.history[@t].instruction
-                sys.history[@t].response
-            }
+    S: SYSTEM_PROMPT
+    S: HISTORY_SYSTEM_PROMPT
+
+    If @T > 1 {
+        ForEach(t: range(1, @T)) {
+            U: sys.history[@t].instruction
+            A: sys.history[@t].generated_command
         }
     }
-    U: {
-        env.instruction[@T]
+    
+    // The current turn
+    U: env.instruction[@T]
+
+    If resp.call_tool {
+        A: resp.call_tool[@T].response
     }
-    A: resp.bash_response[@T]
+    Else {
+        A: resp.not_possible[@T]
+    }
 }

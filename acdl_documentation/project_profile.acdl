@@ -1,22 +1,41 @@
-ProjectProfileAgent[@T]: {
-    S: {
-        SYSTEM_PROMPT
-        If sys.project_profile[@T] {
-            PROJECT_PROFILE(sys.project_profile[@T])
-        }
-        If sys.memory[@T] {
-            PERSISTENT_MEMORIES(sys.memory[@T])
-        }
-        If @T > 1 {
-            CONVERSATION_HISTORY
-            ForEach(t: range(1, @T)) {
-                sys.history[@t].instruction
-                sys.history[@t].response
-            }
+DoitAgent[@T]: {
+    S: SYSTEM_PROMPT
+    U: PROJECT_PROFILE
+    S: MEMORY_SYSTEM_PROMPT
+    S: sys.memories
+    S: HISTORY_SYSTEM_PROMPT
+
+    If @T > 1 {
+        ForEach(t: range(1, @T)) {
+            U: sys.history[@t].instruction
+            A: sys.history[@t].generated_command
+            T: sys.history[@t].bash_response
         }
     }
-    U: {
-        env.instruction[@T]
+    S: USER_AWARENESS_PROMPT
+    ForEach(user_command: sys.user_commands) {
+        S: user_command
     }
-    A: resp.bash_response[@T]
+
+    
+    // The current turn
+    U: env.instruction[@T]
+
+    If resp.call_tool {
+        A: resp.call_tool[@T].response
+    }
+    ElseIf resp.clarification_needed {
+        If sys.clarification_rounds[@t] < MAX_CLARIFICATION_ROUNDS {
+        ForEach(i: range(1, sys.clarification_rounds[@t] + 1)) {
+    
+        Frag ClarificationRound[@T]
+        }
+    }
+    }
+    ElseIf resp.explanation{
+        A: resp.explanation[@T]
+    }
+    ElseIf resp.not_possible {
+        A: resp.not_possible_explanation[@T]
+    }
 }

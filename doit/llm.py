@@ -229,8 +229,6 @@ def _build_bash_messages(
     receive the same conversational context.
     """
     system_content = SYSTEM_PROMPT
-    import ipdb
-    ipdb.set_trace()
     if memory_context:
         system_content = f"{system_content}\n\n{memory_context}"
     if history_context:
